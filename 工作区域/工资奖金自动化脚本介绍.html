@@ -1,0 +1,990 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>工资奖金自动化脚本介绍</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --text: #1f2937;
+      --sub: #4b5563;
+      --line: #d9e2f1;
+      --accent: #d4af37;
+      --accent-deep: #8a6d00;
+      --ok: #0f766e;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+      background: linear-gradient(180deg, #f7f8fc 0%, #eef3fb 100%);
+      color: var(--text);
+    }
+
+    .page {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 40px 24px 56px;
+    }
+
+    .hero {
+      background: linear-gradient(135deg, #111827 0%, #24324a 100%);
+      color: #fff;
+      border-radius: 24px;
+      padding: 36px 40px;
+      box-shadow: 0 20px 50px rgba(17, 24, 39, 0.18);
+    }
+
+    .hero h1 {
+      margin: 0 0 14px;
+      font-size: 34px;
+      line-height: 1.2;
+    }
+
+    .hero p {
+      margin: 0;
+      max-width: 820px;
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 16px;
+      line-height: 1.8;
+    }
+
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .tag {
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: rgba(212, 175, 55, 0.18);
+      border: 1px solid rgba(212, 175, 55, 0.45);
+      color: #fff3c4;
+      font-size: 13px;
+    }
+
+    .section {
+      margin-top: 28px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 28px 28px 24px;
+      box-shadow: 0 8px 24px rgba(31, 41, 55, 0.05);
+    }
+
+    .section h2 {
+      margin: 0 0 18px;
+      font-size: 26px;
+      color: #111827;
+    }
+
+    .section-intro {
+      margin: 0 0 22px;
+      color: var(--sub);
+      line-height: 1.8;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 16px;
+    }
+
+    .card {
+      background: #fbfcfe;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 18px 18px 16px;
+    }
+
+    .card h3 {
+      margin: 0 0 10px;
+      font-size: 18px;
+      color: var(--accent-deep);
+    }
+
+    .card p {
+      margin: 0;
+      color: var(--sub);
+      line-height: 1.75;
+      font-size: 14px;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 14px;
+      margin-top: 6px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 62px 1fr;
+      gap: 14px;
+      align-items: start;
+      padding: 16px 18px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #fcfdff;
+    }
+
+    .step-no {
+      width: 62px;
+      height: 62px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 16px;
+      background: linear-gradient(135deg, #f2df8e 0%, #caa320 100%);
+      color: #3c2e00;
+      font-size: 22px;
+      font-weight: 700;
+    }
+
+    .step h3 {
+      margin: 0 0 8px;
+      font-size: 18px;
+    }
+
+    .step p {
+      margin: 0;
+      color: var(--sub);
+      line-height: 1.8;
+    }
+
+    .highlight {
+      margin-top: 18px;
+      padding: 18px 20px;
+      border-radius: 16px;
+      background: #f4fbfa;
+      border: 1px solid #b8e0db;
+    }
+
+    .highlight h3 {
+      margin: 0 0 10px;
+      font-size: 18px;
+      color: var(--ok);
+    }
+
+    .highlight ul {
+      margin: 0;
+      padding-left: 20px;
+      color: var(--sub);
+      line-height: 1.9;
+    }
+
+    .voucher-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 16px;
+    }
+
+    .voucher-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: #ffffff;
+      overflow: hidden;
+    }
+
+    .voucher-head {
+      padding: 16px 18px 14px;
+      background: linear-gradient(135deg, #203047 0%, #314b72 100%);
+      color: #fff;
+    }
+
+    .voucher-head h3 {
+      margin: 0 0 6px;
+      font-size: 20px;
+    }
+
+    .voucher-head p {
+      margin: 0;
+      color: rgba(255, 255, 255, 0.88);
+      line-height: 1.7;
+      font-size: 13px;
+    }
+
+    .voucher-body {
+      padding: 16px 18px 18px;
+    }
+
+    .voucher-list {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--sub);
+      line-height: 1.8;
+      font-size: 14px;
+    }
+
+    .voucher-list li + li {
+      margin-top: 6px;
+    }
+
+    .rule-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 18px;
+      font-size: 14px;
+    }
+
+    .rule-table th,
+    .rule-table td {
+      border: 1px solid var(--line);
+      padding: 12px 10px;
+      vertical-align: top;
+      text-align: left;
+      line-height: 1.75;
+    }
+
+    .rule-table th {
+      background: #203047;
+      color: #fff;
+      font-weight: 700;
+    }
+
+    .rule-table td {
+      color: var(--sub);
+      background: #fcfdff;
+    }
+
+    .rule-strong {
+      color: #111827;
+      font-weight: 700;
+    }
+
+    .flow-wrap {
+      display: grid;
+      gap: 16px;
+      margin-top: 18px;
+    }
+
+    .flow-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+      align-items: stretch;
+    }
+
+    .flow-box {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #fcfdff;
+      padding: 16px 16px 14px;
+      min-height: 120px;
+    }
+
+    .flow-box h3 {
+      margin: 0 0 8px;
+      font-size: 18px;
+      color: #203047;
+    }
+
+    .flow-box p {
+      margin: 0;
+      color: var(--sub);
+      line-height: 1.75;
+      font-size: 14px;
+    }
+
+    .flow-box.flow-accent {
+      background: #fffaf0;
+      border-color: #ecd48b;
+    }
+
+    .flow-box.flow-green {
+      background: #f4fbfa;
+      border-color: #b8e0db;
+    }
+
+    .flow-arrow {
+      text-align: center;
+      color: var(--accent-deep);
+      font-size: 24px;
+      font-weight: 700;
+      margin: -2px 0;
+    }
+
+    .example-stack {
+      display: grid;
+      gap: 18px;
+      margin-top: 18px;
+    }
+
+    .example-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: #fcfdff;
+      overflow: hidden;
+    }
+
+    .example-head {
+      padding: 16px 18px 14px;
+      background: linear-gradient(135deg, #fffaf0 0%, #f7efcf 100%);
+      border-bottom: 1px solid #ecd48b;
+    }
+
+    .example-head h3 {
+      margin: 0 0 6px;
+      font-size: 20px;
+      color: #5b4600;
+    }
+
+    .example-head p {
+      margin: 0;
+      color: #6b5a1f;
+      line-height: 1.75;
+      font-size: 14px;
+    }
+
+    .example-body {
+      padding: 18px;
+    }
+
+    .example-images {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 14px;
+    }
+
+    .example-figure {
+      margin: 0;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+      overflow: hidden;
+    }
+
+    .example-figure img {
+      display: block;
+      width: 100%;
+      height: auto;
+      background: #fff;
+    }
+
+    .example-figure figcaption {
+      padding: 10px 12px 12px;
+      color: var(--sub);
+      font-size: 13px;
+      line-height: 1.75;
+      background: #fbfcfe;
+      border-top: 1px solid var(--line);
+    }
+
+    .example-list {
+      margin: 16px 0 0;
+      padding-left: 18px;
+      color: var(--sub);
+      line-height: 1.85;
+      font-size: 14px;
+    }
+
+    .example-list li + li {
+      margin-top: 6px;
+    }
+
+    .example-callout {
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: #f4fbfa;
+      border: 1px solid #b8e0db;
+      color: #0f4f49;
+      font-size: 14px;
+      line-height: 1.8;
+    }
+
+    .output-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+      margin-top: 18px;
+    }
+
+    .output-card {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #fcfdff;
+      padding: 18px 18px 16px;
+    }
+
+    .output-card h3 {
+      margin: 0 0 10px;
+      font-size: 18px;
+      color: #203047;
+    }
+
+    .output-card ul {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--sub);
+      line-height: 1.8;
+      font-size: 14px;
+    }
+
+    .output-card li + li {
+      margin-top: 6px;
+    }
+
+    .footer {
+      margin-top: 24px;
+      text-align: center;
+      color: #6b7280;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <h1>工资奖金自动化脚本介绍</h1>
+      <p>
+        本脚本面向财务月度工资奖金业务场景，能够从 HR 原始工资表出发，自动完成数据整理、映射校验、银行流水核对、SAP 标准凭证生成及公司拆分输出。
+        它不仅减少了手工汇总与重复检查的工作量，也把关键财务逻辑固化进脚本中，确保处理过程可重复、可追溯、可校验。
+      </p>
+      <div class="tag-row">
+        <div class="tag">自动识别数据源</div>
+        <div class="tag">按公司拆分输出</div>
+        <div class="tag">银行流水智能匹配</div>
+        <div class="tag">SAP 标准凭证生成</div>
+        <div class="tag">借贷平衡严格校验</div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>第一部分：A1-A10 凭证逻辑与校验规则</h2>
+      <p class="section-intro">
+        为便于快速汇报与复核，下面将 A1-A10 各张凭证的用途、取数逻辑、分摊口径、文本规则与核心校验点集中展示。
+        阅读这一部分时，不需要先理解脚本代码，只需按凭证编号逐张查看即可快速把握整套自动化方案。
+      </p>
+
+      <div class="voucher-grid">
+        <div class="voucher-card">
+          <div class="voucher-head">
+            <h3>A1 社保扣款凭证</h3>
+            <p>支付工资期间社保，借方挂应付社保，贷方逐笔展开银行流水。</p>
+          </div>
+          <div class="voucher-body">
+            <ul class="voucher-list">
+              <li><span class="rule-strong">借方</span>：公司/个人承担养老、失业、工伤、医疗，对应应付职工薪酬科目。</li>
+              <li><span class="rule-strong">贷方</span>：取次月银行流水中社保对应国库流水的银行科目，按实际流水逐行展开。</li>
+              <li><span class="rule-strong">日期</span>：取匹配银行流水中的最后交易日期。</li>
+              <li><span class="rule-strong">校验</span>：工资表社保 7 列汇总必须与银行社保流水严格一致。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="voucher-card">
+          <div class="voucher-head">
+            <h3>A2 公积金扣款凭证</h3>
+            <p>支付公积金，借方按个人/公司对半拆分，贷方逐笔展开公积金流水。</p>
+          </div>
+          <div class="voucher-body">
+            <ul class="voucher-list">
+              <li><span class="rule-strong">借方</span>：`2211070001` 与 `2211070002`，按银行公积金总额拆分。</li>
+              <li><span class="rule-strong">贷方</span>：取银行流水中“北京住房公积金管理中心”对应银行科目，按实际流水逐行展开。</li>
+              <li><span class="rule-strong">日期</span>：取公积金流水最后交易日期。</li>
+              <li><span class="rule-strong">校验</span>：工资表公司+个人公积金应与对应月份银行公积金流水一致，特殊月份按预设差额规则处理。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="voucher-card">
+          <div class="voucher-head">
+            <h3>A3 工资扣款凭证</h3>
+            <p>支付实发工资、劳务费与个税，工资流水支持多笔组合匹配。</p>
+          </div>
+          <div class="voucher-body">
+            <ul class="voucher-list">
+              <li><span class="rule-strong">借方</span>：劳务费、个人所得税、应付职工薪酬-薪酬。</li>
+              <li><span class="rule-strong">贷方</span>：次月银行流水中匹配实发工资组合 + 个税流水，按银行流水逐行展开。</li>
+              <li><span class="rule-strong">日期</span>：工资流水组合与个税流水中的最后交易日期。</li>
+              <li><span class="rule-strong">校验</span>：Q 列实发金额与代发工资组合匹配；个税与国库较小金额流水匹配。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="voucher-card">
+          <div class="voucher-head">
+            <h3>A4 上月实际工资入账</h3>
+            <p>按成本中心 + 内部订单计提实际发生的工资相关费用，排除劳务费。</p>
+          </div>
+          <div class="voucher-body">
+            <ul class="voucher-list">
+              <li><span class="rule-strong">借方</span>：工资、养老、失业、工伤、医疗、公积金费用，按成本中心 + 内部订单展开。</li>
+              <li><span class="rule-strong">贷方</span>：应付社保、公积金、个税、实发工资、其他项目。</li>
+              <li><span class="rule-strong">日期</span>：处理月份最后一天。</li>
+              <li><span class="rule-strong">特殊逻辑</span>：`OSD运营支持部` 且工时类型为“自研”的项目，内部订单按 `OSD运营支持部日常工作` 处理。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="voucher-card">
+          <div class="voucher-head">
+            <h3>A5 当月工资计提</h3>
+            <p>与 A4 同总额、同科目口径，但借方只到成本中心层级。</p>
+          </div>
+          <div class="voucher-body">
+            <ul class="voucher-list">
+              <li><span class="rule-strong">借方</span>：工资、社保、公积金费用按成本中心汇总，不拆内部订单。</li>
+              <li><span class="rule-strong">贷方</span>：与 A4 同口径，汇总到应付职工薪酬及相关科目。</li>
+              <li><span class="rule-strong">日期</span>：处理月份最后一天。</li>
+              <li><span class="rule-strong">校验</span>：A5 借贷总额必须与 A4 保持一致。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="voucher-card">
+          <div class="voucher-head">
+            <h3>A6 研发工时分摊调整</h3>
+            <p>先冲回 A5 的非 OSD 费用，再按研发工时比例分摊到内部订单。</p>
+          </div>
+          <div class="voucher-body">
+            <ul class="voucher-list">
+              <li><span class="rule-strong">贷方</span>：原样冲回 A5 借方费用，科目不变、成本中心不变、内部订单为空。</li>
+              <li><span class="rule-strong">借方</span>：按部门内项目工时占比分摊到内部订单，成本中心沿用原部门成本中心。</li>
+              <li><span class="rule-strong">工时口径</span>：只取当月、只统计 `K&gt;0`，`OSD运营支持部` 不参与分摊。</li>
+              <li><span class="rule-strong">校验</span>：若非 OSD 部门没有可分摊工时，则不允许生成 A6；尾差自动回补到最后一个内部订单。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="voucher-card">
+          <div class="voucher-head">
+            <h3>A7 年终奖计提</h3>
+            <p>按成本中心计提年终奖，季度末采用累计口径并乘当月奖金系数。</p>
+          </div>
+          <div class="voucher-body">
+            <ul class="voucher-list">
+              <li><span class="rule-strong">借方</span>：统一为 `6601010003`，按成本中心展开。</li>
+              <li><span class="rule-strong">贷方</span>：统一为 `2211010001`，每家公司只放 1 行汇总。</li>
+              <li><span class="rule-strong">金额规则</span>：季度末取 1-当月累计奖金金额，再乘当月奖金系数；系数不追溯历史月份。</li>
+              <li><span class="rule-strong">文本/文件名</span>：如 `计提2026Q1年终奖`、`计提Q1-Q2年终奖`。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="voucher-card">
+          <div class="voucher-head">
+            <h3>A8 年终奖分摊</h3>
+            <p>将 A7 的奖金费用按奖金期间对应的工时口径分摊到内部订单。</p>
+          </div>
+          <div class="voucher-body">
+            <ul class="voucher-list">
+              <li><span class="rule-strong">科目</span>：借贷双方都统一为 `6601010003`。</li>
+              <li><span class="rule-strong">贷方</span>：冲回 A7 的非 OSD 奖金费用。</li>
+              <li><span class="rule-strong">借方</span>：按内部订单分摊奖金，成本中心保持不变。</li>
+              <li><span class="rule-strong">工时口径</span>：1月只看1月工时，2月只看2月工时，3/6/9/12月看1-当月累计工时。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="voucher-card">
+          <div class="voucher-head">
+            <h3>A9 CO工单分摊</h3>
+            <p>仅针对 2050，将待分摊费用按 CO 工单比例重新分配到指定订单。</p>
+          </div>
+          <div class="voucher-body">
+            <ul class="voucher-list">
+              <li><span class="rule-strong">贷方</span>：来自 `CO工单分摊.xlsx` 的待分摊费用，固定成本中心 `20502020`、固定内部订单 `9201856`。</li>
+              <li><span class="rule-strong">借方</span>：按 `CO工单分摊` sheet 中 `G列不为0` 的订单，用 `E列实际成本借方` 作为比例分摊。</li>
+              <li><span class="rule-strong">特殊规则</span>：最后一行加总仅用于校验，不参与分母；贷方 `O列` 反记账固定写小写 `x`。</li>
+              <li><span class="rule-strong">校验</span>：A9 借贷必须平衡，且明细 `G列` 合计必须等于最后一行加总。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="voucher-card">
+          <div class="voucher-head">
+            <h3>A10 研发费用分摊</h3>
+            <p>将待分摊费用按公司内、部门内当月工时比例重新分配到研发内部订单。</p>
+          </div>
+          <div class="voucher-body">
+            <ul class="voucher-list">
+              <li><span class="rule-strong">贷方</span>：冲销 `待分摊费用YYMM.xlsx` 中原费用，记账码 `50`，科目取 `J列`，金额取 `L列`，成本中心/内部订单取 `S/U列`。</li>
+              <li><span class="rule-strong">借方</span>：记账码 `40`，科目仍取原费用科目，按工时分摊到项目订单，成本中心沿用分摊后的成本中心。</li>
+              <li><span class="rule-strong">分摊口径</span>：严格公司内分摊，默认部门内分摊，`OSD` 不参与；`HLD/LHD` 视为同一部门，且 `9201856` 不参与 HLD 分摊。</li>
+              <li><span class="rule-strong">特殊规则</span>：`2050` 的 `20502050` 借方分摊视为 `20502060`；`2060` 的 `20602020` 若无部门工时，则改按整个耐数信息公司工时分摊。</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <table class="rule-table">
+        <thead>
+          <tr>
+            <th>校验主题</th>
+            <th>控制规则</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>基础数据完整性</td>
+            <td>工资单、Mapping 表、工时数据、年终奖数据、银行流水必须齐全；工时项目必须先全部匹配到内部订单，否则不允许继续处理。</td>
+          </tr>
+          <tr>
+            <td>公司隔离</td>
+            <td>所有工资、奖金、工时、银行流水、内部订单分摊均按公司严格隔离，不允许跨公司取数或分摊。</td>
+          </tr>
+          <tr>
+            <td>银行核对</td>
+            <td>工资、公积金、个税、社保四类项目分别核对；工资支持最多 5 笔代发工资组合匹配，差异结果直接反馈到输出文件。</td>
+          </tr>
+          <tr>
+            <td>借贷平衡</td>
+            <td>A1-A10 每一张凭证都单独检查借贷平衡，精确到分；涉及拆分的凭证自动做尾差回补，确保 SAP 导入前金额严格相等。</td>
+          </tr>
+          <tr>
+            <td>跨凭证逻辑</td>
+            <td>工资主链条对 A1-A4 重点科目执行交叉验证；A5/A6、A7/A8、A9、A10 则通过“原金额 = 冲回金额 = 分摊金额”保证前后衔接。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section">
+      <h2>第二部分：本次数据示例与校验对应</h2>
+      <p class="section-intro">
+        以下示例均取自本次 <code>202602</code> 工资、<code>202603</code> 处理场景中的真实 Excel 数据。
+        每张凭证都配了对应的数据截图，并明确标出“哪个区域和哪个区域在做校验 / 汇总 / 分摊”。
+      </p>
+
+      <div class="example-stack">
+        <div class="example-card">
+          <div class="example-head">
+            <h3>A1 社保扣款凭证示例</h3>
+            <p>左侧取工资整理文件总计行中的社保相关列，右侧取 3 月银行流水中的两条国库流水。</p>
+          </div>
+          <div class="example-body">
+            <div class="example-images">
+              <figure class="example-figure">
+                <img src="doc_assets/a1-payroll-social.png" alt="A1工资整理示例">
+                <figcaption>工资整理文件：总计行中 <code>F:I</code> 与 <code>K:M</code> 七列社保金额。</figcaption>
+              </figure>
+              <figure class="example-figure">
+                <img src="doc_assets/a1-bank-social.png" alt="A1银行流水示例">
+                <figcaption>银行流水：同批两条 <code>国家金库北京市分库</code> 流水中，金额较大的那条归属社保，金额较小的那条留给 A3 个税。</figcaption>
+              </figure>
+            </div>
+            <ul class="example-list">
+              <li>校验关系：工资表社保七列合计 <code>211,246.82</code> ↔ 银行流水社保行 <code>O列 211,246.82</code>。</li>
+              <li>区分方式：同一批国库流水里，较小金额 <code>19,469.94</code> 属于个税，不计入 A1。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="example-card">
+          <div class="example-head">
+            <h3>A2 公积金扣款凭证示例</h3>
+            <p>左侧取工资整理文件中的公司/个人公积金，右侧取 2 月银行流水中的公积金付款行。</p>
+          </div>
+          <div class="example-body">
+            <div class="example-images">
+              <figure class="example-figure">
+                <img src="doc_assets/a2-payroll-fund.png" alt="A2工资整理示例">
+                <figcaption>工资整理文件：总计行中的 <code>J列 公司公积金</code> 与 <code>N列 个人公积金</code>。</figcaption>
+              </figure>
+              <figure class="example-figure">
+                <img src="doc_assets/a2-bank-fund.png" alt="A2银行流水示例">
+                <figcaption>银行流水：<code>北京住房公积金管理中心</code> 对应的付款行，贷方银行科目也来自这条流水。</figcaption>
+              </figure>
+            </div>
+            <ul class="example-list">
+              <li>校验关系：工资表 <code>J+N = 94,812.00</code>，银行流水为 <code>91,162.00</code>。</li>
+              <li>本月特殊规则：这是已确认的 <code>2050 / 202602</code> 公积金特殊月份，按“工资表比银行大 3,650”处理。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="example-card">
+          <div class="example-head">
+            <h3>A3 工资扣款凭证示例</h3>
+            <p>劳务费逐行取工资表，工资与个税则分别去匹配代发工资组合和较小金额国库流水。</p>
+          </div>
+          <div class="example-body">
+            <div class="example-images">
+              <figure class="example-figure">
+                <img src="doc_assets/a3-payroll-salary.png" alt="A3工资整理示例">
+                <figcaption>工资整理文件：蓝色行为劳务费示例，底部总计行展示 <code>O/Q</code> 汇总，右侧 <code>S/T</code> 提供劳务费的成本中心和内部订单。</figcaption>
+              </figure>
+              <figure class="example-figure">
+                <img src="doc_assets/a3-bank-salary-tax.png" alt="A3银行流水示例">
+                <figcaption>银行流水：两条 <code>代发工资</code> 组成工资付款组合，较小金额国库流水用于个税。</figcaption>
+              </figure>
+            </div>
+            <ul class="example-list">
+              <li>对应关系 1：劳务费借方逐行取 <code>D=劳务费</code> 的 <code>E列</code>，并带出该行的 <code>S/T</code>。</li>
+              <li>对应关系 2：非劳务薪资的 <code>Q列汇总</code> 形成 <code>2211010001</code>，非劳务的 <code>O列汇总</code> 形成 <code>2221070000</code>。</li>
+              <li>校验关系：银行侧使用“代发工资组合 + 个税国库行”，不把社保国库行混入 A3。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="example-card">
+          <div class="example-head">
+            <h3>A4 上月实际工资入账示例</h3>
+            <p>左侧展示工资整理文件中已匹配好的成本中心/内部订单，右侧展示 A4 在凭证模板中的落地结果。</p>
+          </div>
+          <div class="example-body">
+            <div class="example-images">
+              <figure class="example-figure">
+                <img src="doc_assets/a4-payroll-source.png" alt="A4来源示例">
+                <figcaption>工资整理文件：按 <code>S列成本中心</code>、<code>T列内部订单</code> 与费用相关列聚合，排除劳务费后生成 A4。</figcaption>
+              </figure>
+              <figure class="example-figure">
+                <img src="doc_assets/a4-voucher.png" alt="A4凭证示例">
+                <figcaption>A4 凭证：前半段是借方费用，后半段是应付社保、公积金、个税、实发工资和其他项目等贷方。</figcaption>
+              </figure>
+            </div>
+            <ul class="example-list">
+              <li>借方来源：工资整理文件中非劳务行的费用列，按 <code>成本中心 + 内部订单</code> 汇总后入账。</li>
+              <li>贷方来源：社保、公积金、个税、实发工资、其他项目等汇总值。</li>
+              <li>本次结果：A4 借贷总额均为 <code>862,411.56</code>。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="example-card">
+          <div class="example-head">
+            <h3>A5 当月工资计提示例</h3>
+            <p>A5 和 A4 的金额口径一致，只是借方不再拆到内部订单，而是停留在成本中心层级。</p>
+          </div>
+          <div class="example-body">
+            <div class="example-images">
+              <figure class="example-figure">
+                <img src="doc_assets/a5-voucher.png" alt="A5凭证示例">
+                <figcaption>A5 凭证：借方只有成本中心，没有内部订单；贷方仍然挂应付职工薪酬及相关科目。</figcaption>
+              </figure>
+            </div>
+            <ul class="example-list">
+              <li>校验关系：A5 与 A4 使用相同的工资费用基础数据，只改变借方聚合维度。</li>
+              <li>本次结果：A5 借贷总额均为 <code>862,411.56</code>，与 A4 完全一致。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="example-card">
+          <div class="example-head">
+            <h3>A6 研发工时分摊调整示例</h3>
+            <p>先看 3 月工时明细，再看核对表的分摊结果，最后看 A6 凭证如何把金额打到内部订单。</p>
+          </div>
+          <div class="example-body">
+            <div class="example-images">
+              <figure class="example-figure">
+                <img src="doc_assets/a6-timesheet.png" alt="A6工时示例">
+                <figcaption>工时数据：示例取 <code>2050 / WLS</code> 部门 3 月的若干项目，使用 <code>K列工时</code> 和 <code>M列内部订单</code>。</figcaption>
+              </figure>
+              <figure class="example-figure">
+                <img src="doc_assets/a6-detail.png" alt="A6核对表示例">
+                <figcaption>A5-A6 核对表：把 <code>A5金额</code> 按项目工时占比拆成 <code>A6分摊金额</code>，便于复核。</figcaption>
+              </figure>
+              <figure class="example-figure">
+                <img src="doc_assets/a6-voucher.png" alt="A6凭证示例">
+                <figcaption>A6 凭证：先冲回 A5 的非 OSD 费用，再按工时比例借记到内部订单层级。</figcaption>
+              </figure>
+            </div>
+            <ul class="example-list">
+              <li>校验关系：<code>A5原金额</code> ↔ <code>A6分摊金额合计</code>，同一部门同一科目必须完全一致。</li>
+              <li>工时口径：仅取 <code>3月</code>、仅统计 <code>K&gt;0</code>、<code>OSD</code> 不分摊。</li>
+              <li>本次结果：2050 的 A6 分摊总额为 <code>725,265.05</code>。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="example-card">
+          <div class="example-head">
+            <h3>A7 年终奖计提示例</h3>
+            <p>先取年终奖基础表中的部门金额，再取 3 月奖金系数，最后生成 A7 计提凭证。</p>
+          </div>
+          <div class="example-body">
+            <div class="example-images">
+              <figure class="example-figure">
+                <img src="doc_assets/a7-bonus-source.png" alt="A7奖金来源示例">
+                <figcaption>奖金数据：<code>2050</code> 公司在 <code>2026-01/02/03</code> 三列的基础金额，会用于 Q1 累计。</figcaption>
+              </figure>
+              <figure class="example-figure">
+                <img src="doc_assets/a7-bonus-ratio.png" alt="A7奖金系数示例">
+                <figcaption>奖金系数：3 月对应 <code>0.87</code>，按“只看当月系数、不追溯历史月份”的口径处理。</figcaption>
+              </figure>
+              <figure class="example-figure">
+                <img src="doc_assets/a7-voucher.png" alt="A7凭证示例">
+                <figcaption>A7 凭证：借方按成本中心逐条展开，贷方 <code>2211010001</code> 每家公司只放 1 行汇总。</figcaption>
+              </figure>
+            </div>
+            <ul class="example-list">
+              <li>计算关系：<code>2026-01~03累计奖金</code> × <code>3月系数 0.87</code> → A7 计提金额。</li>
+              <li>本次结果：2050 的 A7 借贷总额均为 <code>543,736.08</code>。</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="example-card">
+          <div class="example-head">
+            <h3>A8 年终奖分摊示例</h3>
+            <p>A8 在季度末看的是 1-3 月累计工时，不是只看单月工时；OSD 奖金不参与分摊。</p>
+          </div>
+          <div class="example-body">
+            <div class="example-images">
+              <figure class="example-figure">
+                <img src="doc_assets/a8-timesheet-q1.png" alt="A8工时示例">
+                <figcaption>工时数据：示例展示 <code>2050 / WLS</code> 在 <code>1-3月</code> 的累计工时样例，用于季度末奖金分摊。</figcaption>
+              </figure>
+              <figure class="example-figure">
+                <img src="doc_assets/a8-voucher.png" alt="A8凭证示例">
+                <figcaption>A8 凭证：贷方冲回 A7 的非 OSD 奖金费用，借方再按内部订单重新展开。</figcaption>
+              </figure>
+            </div>
+            <ul class="example-list">
+              <li>校验关系：A8 分摊前总额 = A8 分摊后总额；只是从成本中心口径改成“成本中心 + 内部订单”口径。</li>
+              <li>差异来源：A8 不分摊 OSD，所以本次 <code>A8 515,247.93</code> 小于 <code>A7 543,736.08</code>。</li>
+            </ul>
+            <div class="example-callout">
+              这部分截图最适合在汇报时直接展示给财务或管理层，因为可以一眼看到“源数据长什么样、脚本拿了哪些字段、最后又落到了哪张凭证里”。
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>第三部分：A1-A10 关系图</h2>
+      <p class="section-intro">
+        从业务链条上看，工资与奖金相关凭证并不是孤立存在的，而是分成“实际支付”“月末计提”“工时分摊”“奖金计提与分摊”四个连续环节。
+        下图用于帮助非技术读者快速理解 A1-A10 之间的前后关系。
+      </p>
+
+      <div class="flow-wrap">
+        <div class="flow-row">
+          <div class="flow-box flow-accent">
+            <h3>工资支付链</h3>
+            <p>A1 社保扣款、A2 公积金扣款、A3 工资及劳务费支付，三张凭证都直接对应银行流水，解决“实际支付”问题。</p>
+          </div>
+          <div class="flow-box">
+            <h3>A4 实际工资入账</h3>
+            <p>把上月工资费用正式入账到成本中心 + 内部订单层级，形成完整的实际成本归集。</p>
+          </div>
+          <div class="flow-box flow-green">
+            <h3>校验闭环</h3>
+            <p>A1-A4 之间重点往来科目会交叉核对，确保从支付到入账的金额逻辑严格一致。</p>
+          </div>
+        </div>
+
+        <div class="flow-arrow">↓</div>
+
+        <div class="flow-row">
+          <div class="flow-box flow-accent">
+            <h3>A5 当月计提</h3>
+            <p>先把当月工资成本计提到成本中心层级，形成月末费用与应付职工薪酬。</p>
+          </div>
+          <div class="flow-box">
+            <h3>A6 研发工时分摊</h3>
+            <p>冲回 A5 的非 OSD 费用，再按研发工时把费用重新分配到内部订单层级。</p>
+          </div>
+          <div class="flow-box flow-green">
+            <h3>结果</h3>
+            <p>实现“先按部门计提、再按项目分摊”的月末研发费用归集逻辑。</p>
+          </div>
+        </div>
+
+        <div class="flow-arrow">↓</div>
+
+        <div class="flow-row">
+          <div class="flow-box flow-accent">
+            <h3>A7 年终奖计提</h3>
+            <p>按成本中心口径计提年终奖，季度末按累计奖金金额乘当月奖金系数重新计提。</p>
+          </div>
+          <div class="flow-box">
+            <h3>A8 年终奖分摊</h3>
+            <p>将 A7 的非 OSD 奖金费用按奖金口径下的工时规则分配到内部订单。</p>
+          </div>
+          <div class="flow-box flow-green">
+            <h3>结果</h3>
+            <p>实现“年终奖先计提、再按研发项目分摊”的独立奖金核算链条。</p>
+          </div>
+        </div>
+
+        <div class="flow-arrow">↓</div>
+
+        <div class="flow-row">
+          <div class="flow-box flow-accent">
+            <h3>A9 CO工单分摊</h3>
+            <p>把 2050 的待分摊费用按 CO 工单比例重新落到指定订单，形成独立的 CO 调整链条。</p>
+          </div>
+          <div class="flow-box">
+            <h3>A10 研发费用分摊</h3>
+            <p>把待分摊费用按公司内、部门内当月工时重新分配到研发内部订单，形成独立的研发费用分摊文件。</p>
+          </div>
+          <div class="flow-box flow-green">
+            <h3>结果</h3>
+            <p>实现“待分摊费用先冲销、再按工时重分配”的补充分摊闭环，并兼容 2050/2060 的特殊规则。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>第四部分：五类输出文件清单</h2>
+      <p class="section-intro">
+        脚本最终不是只输出一张表，而是按业务性质拆成五类文件，便于 SAP 导入、财务复核以及后续留档。
+      </p>
+
+      <div class="output-grid">
+        <div class="output-card">
+          <h3>1. 工资整理文件</h3>
+          <ul>
+            <li>按公司拆分输出，如 `2月工资单-整理后.xlsx`。</li>
+            <li>包含 A/B 填充、Q 列校验、S 列成本中心、T 列内部订单以及银行核对结果。</li>
+            <li>适合财务先做基础复核，再进入凭证导入阶段。</li>
+          </ul>
+        </div>
+
+        <div class="output-card">
+          <h3>2. 薪酬凭证文件</h3>
+          <ul>
+            <li>“实际”文件：包含 A1-A4。</li>
+            <li>“计提”文件：包含 A5-A6。</li>
+            <li>按公司分别输出，如 `2050总账凭证导入-实际202603薪酬.XLS`、`2050总账凭证导入-计提202603薪酬.XLS`。</li>
+          </ul>
+        </div>
+
+        <div class="output-card">
+          <h3>3. 年终奖凭证文件</h3>
+          <ul>
+            <li>单独输出年终奖计提与分摊文件，包含 A7-A8。</li>
+            <li>文件名按月度或季度累计口径变化，例如 `计提202601年终奖`、`计提2026Q1年终奖`、`计提Q1-Q2年终奖`。</li>
+            <li>适合单独导入、单独归档，不与工资计提文件混在一起。</li>
+          </ul>
+        </div>
+
+        <div class="output-card">
+          <h3>4. CO工单分摊文件</h3>
+          <ul>
+            <li>仅 `2050` 输出，包含 A9。</li>
+            <li>例如 `CO工单分摊/2050总账凭证导入-CO工单分摊202603.XLS`。</li>
+            <li>用于工资与奖金完成后，再做 CO 工单专项分摊。</li>
+          </ul>
+        </div>
+
+        <div class="output-card">
+          <h3>5. 研发费用分摊文件</h3>
+          <ul>
+            <li>`2050`、`2060` 都会输出，包含 A10。</li>
+            <li>例如 `2050总账-研发费用分摊2603.XLS`、`2060总账-研发费用分摊2603.XLS`。</li>
+            <li>用于将待分摊费用按工时重新分配到研发内部订单。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <div class="footer">
+      工资奖金自动化方案展示页
+    </div>
+  </div>
+</body>
+</html>

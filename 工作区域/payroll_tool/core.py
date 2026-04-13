@@ -20,6 +20,7 @@ from .options import (
     CO_VOUCHERS,
     RD_VOUCHERS,
     VOUCHER_DISPLAY_ORDER,
+    format_period_label,
     normalize_run_options,
     requires_bank_data,
     requires_bonus_data,
@@ -214,8 +215,19 @@ def _get_logo_path(base_dir):
     return None
 
 
-def _find_raw_files(raw_dir):
-    return sorted(glob.glob(os.path.join(raw_dir, RAW_FILE_PATTERN)))
+def _find_raw_files(raw_dir, payroll_year=None, payroll_month=None):
+    paths = sorted(glob.glob(os.path.join(raw_dir, RAW_FILE_PATTERN)))
+    if payroll_year is None or payroll_month is None:
+        return paths
+    matched = []
+    for path in paths:
+        try:
+            file_year, file_month = _extract_payroll_period(path)
+        except ValueError:
+            continue
+        if file_year == payroll_year and file_month == payroll_month:
+            matched.append(path)
+    return matched
 
 
 def _find_bank_files(bank_dir):
@@ -919,10 +931,26 @@ def _build_cost_center_reverse_map(cost_center_map):
     return reverse_map
 
 
-def _load_bank_records(bank_dir):
-    bank_records = {}
+def _normalize_bank_date_key(value):
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return _normalize_text(value)
 
-    for path in _find_bank_files(bank_dir):
+
+def _load_bank_records_with_stats(bank_dir):
+    bank_records = {}
+    seen_rows = set()
+    source_files = _find_bank_files(bank_dir)
+    stats = {
+        'source_file_count': len(source_files),
+        'scanned_row_count': 0,
+        'deduped_row_count': 0,
+        'kept_row_count': 0,
+    }
+
+    for path in source_files:
         wb = load_workbook(path, data_only=True, read_only=True)
         ws = wb[wb.sheetnames[0]]
 
@@ -939,6 +967,20 @@ def _load_bank_records(bank_dir):
             if not company_code or trans_period is None:
                 continue
 
+            stats['scanned_row_count'] += 1
+            row_identity = (
+                company_code,
+                _normalize_bank_date_key(trans_date),
+                outgoing_amt,
+                usage,
+                payment_name,
+                bank_subject,
+            )
+            if row_identity in seen_rows:
+                stats['deduped_row_count'] += 1
+                continue
+            seen_rows.add(row_identity)
+
             key = (company_code, trans_period[0], trans_period[1])
             bank_records.setdefault(key, []).append(
                 {
@@ -953,8 +995,13 @@ def _load_bank_records(bank_dir):
                     'bank_subject': bank_subject,
                 }
             )
+            stats['kept_row_count'] += 1
 
-    return bank_records
+    return {'records': bank_records, 'stats': stats}
+
+
+def _load_bank_records(bank_dir):
+    return _load_bank_records_with_stats(bank_dir)['records']
 
 
 def _summarize_bank_records(bank_records, company_code, year, month):
@@ -2403,10 +2450,24 @@ def fill_first_sheet_ab(input_path, base_dir, mapping_path, bank_dir, log, run_o
         'ok',
     )
     bank_records = {}
+    bank_scan_stats = {
+        'source_file_count': 0,
+        'scanned_row_count': 0,
+        'deduped_row_count': 0,
+        'kept_row_count': 0,
+    }
     if requires_bank_data(run_options):
         log('正在读取银行流水…')
-        bank_records = _load_bank_records(bank_dir)
-        log('银行流水读取完成', 'ok')
+        bank_load_result = _load_bank_records_with_stats(bank_dir)
+        bank_records = bank_load_result['records']
+        bank_scan_stats = bank_load_result['stats']
+        log(
+            '银行流水读取完成：'
+            f'扫描 {bank_scan_stats["source_file_count"]} 个文件，'
+            f'保留 {bank_scan_stats["kept_row_count"]} 行，'
+            f'去重 {bank_scan_stats["deduped_row_count"]} 行',
+            'ok',
+        )
     else:
         log('本次未选择 A1-A3，已跳过银行流水读取', 'warn')
 
@@ -2555,7 +2616,7 @@ def fill_first_sheet_ab(input_path, base_dir, mapping_path, bank_dir, log, run_o
     else:
         log('所有数据校验和匹配均通过', 'ok')
 
-    payroll_year, payroll_month = _extract_payroll_period(input_path)
+    payroll_year, payroll_month = run_options.payroll_period
     next_year, next_month = _shift_month(payroll_year, payroll_month, 1)
     bank_results = []
     company_bank_results = {}
@@ -2576,7 +2637,7 @@ def fill_first_sheet_ab(input_path, base_dir, mapping_path, bank_dir, log, run_o
                 continue
 
             salary_tax_bank = _summarize_bank_records(bank_records, company_code, next_year, next_month)
-            fund_bank = _summarize_bank_records(bank_records, company_code, payroll_year, payroll_month)
+            fund_bank = _summarize_bank_records(bank_records, company_code, next_year, next_month)
             salary_match = _match_salary_combination(
                 salary_tax_bank['salary_records'],
                 summary['salary'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP),
@@ -2584,7 +2645,7 @@ def fill_first_sheet_ab(input_path, base_dir, mapping_path, bank_dir, log, run_o
 
             checks = [
                 ('salary', '实发工资', summary['salary'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP), salary_match['matched_amount'], f'{next_year}-{next_month:02d}'),
-                ('fund', '公积金', summary['fund'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP), fund_bank['fund'], f'{payroll_year}-{payroll_month:02d}'),
+                ('fund', '公积金', summary['fund'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP), fund_bank['fund'], f'{next_year}-{next_month:02d}'),
                 ('tax', '个税', summary['tax'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP), salary_tax_bank['tax'], f'{next_year}-{next_month:02d}'),
                 ('social', '社保', summary['social'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP), salary_tax_bank['social'], f'{next_year}-{next_month:02d}'),
             ]
@@ -2678,6 +2739,9 @@ def fill_first_sheet_ab(input_path, base_dir, mapping_path, bank_dir, log, run_o
         'bank_fund_issue_count': bank_fund_issue_count,
         'bank_tax_issue_count': bank_tax_issue_count,
         'bank_social_issue_count': bank_social_issue_count,
+        'bank_scan_stats': bank_scan_stats,
+        'processing_period_label': format_period_label(run_options.processing_year, run_options.processing_month),
+        'payroll_period_label': format_period_label(payroll_year, payroll_month),
         'output_paths': output_paths,
         'voucher_paths': voucher_paths,
         'voucher_validation_summary': voucher_validation_summary,

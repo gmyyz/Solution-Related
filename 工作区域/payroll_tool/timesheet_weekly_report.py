@@ -4,7 +4,8 @@ from datetime import datetime
 
 from openpyxl import load_workbook
 
-from .core import _copy_cell_style, _get_timesheet_path, _normalize_text
+from .core import _get_timesheet_path
+from .workbook_utils import _copy_cell_style, _normalize_text
 
 
 TEMPLATE_FILENAME = '耐数周报工时-模板.xlsx'

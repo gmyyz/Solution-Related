@@ -4,8 +4,8 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
+from .banking import BANK_FILE_PATTERN, _find_bank_files
 from .core import (
-    BANK_FILE_PATTERN,
     COLOR_BG,
     COLOR_BORDER,
     COLOR_CARD,
@@ -20,7 +20,6 @@ from .core import (
     _apply_style,
     _btn,
     _circle_label,
-    _find_bank_files,
     _find_raw_files,
     _get_bank_dir,
     _get_bonus_path,

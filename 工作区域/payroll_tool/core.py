@@ -1,26 +1,29 @@
 import glob
 import io
 import os
-import queue
 import re
 import shutil
-import threading
 import tkinter as tk
 from copy import copy
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP, ROUND_DOWN
-from itertools import combinations
-from tkinter import ttk, messagebox
+from tkinter import ttk
 
 from openpyxl import Workbook, load_workbook
 
+from .banking import (
+    _get_treasury_records,
+    _load_bank_records,
+    _load_bank_records_with_stats,
+    _match_bank_record_combination,
+    _match_salary_combination,
+    _match_treasury_combination,
+    _normalize_bank_date_key,
+    _summarize_bank_records,
+)
 from .compensation_report import generate_compensation_report
 from .options import (
     ACTUAL_VOUCHERS,
-    ACCRUAL_VOUCHERS,
-    BONUS_VOUCHERS,
-    CO_VOUCHERS,
-    RD_VOUCHERS,
     VOUCHER_DISPLAY_ORDER,
     build_batch_layout,
     format_period_label,
@@ -29,6 +32,26 @@ from .options import (
     requires_bonus_data,
     requires_co_data,
     requires_shared_expense_data,
+)
+from .rules import (
+    BANK_REASON_CODE,
+    BANK_VOUCHER_TYPE,
+    BONUS_TAX_BY_PAYMENT_PERIOD,
+)
+from .workbook_utils import (
+    _copy_cell_style,
+    _find_total_row,
+    _format_code,
+    _is_blank,
+    _is_blank_project,
+    _is_total_row,
+    _mark_range_red,
+    _mark_row_red,
+    _normalize_text,
+    _recalculate_total_row,
+    _to_decimal,
+    _to_money,
+    _to_text_money,
 )
 
 
@@ -54,8 +77,6 @@ RAW_FILE_PATTERNS = (
     '耐数人力成本分摊* - to财务.xlsx',
 )
 RAW_FILE_PATTERN = RAW_FILE_PATTERNS[0]
-BANK_FILE_PATTERN = '银行流水*.xlsx'
-ERROR_FONT_COLOR = 'FFFF0000'
 COMPANY_NAME_TO_CODE = {'耐数电子': '2050', '耐数信息': '2060'}
 COMPANY_CODE_TO_NAME = {value: key for key, value in COMPANY_NAME_TO_CODE.items()}
 SOCIAL_DEBIT_ACCOUNT_COLUMNS = [
@@ -122,13 +143,6 @@ CO_DEBIT_GL_BY_SOURCE = {
 CO_CREDIT_COST_CENTER = '20502020'
 CO_CREDIT_ORDER = '9201856'
 EXAMPLE_IMAGE_DIRNAME = '示例截图'
-MAX_BANK_MATCH_COMBO_SIZE = 6
-BANK_VOUCHER_TYPE = 'KZ'
-BANK_REASON_CODE = '202'
-BONUS_TAX_BY_PAYMENT_PERIOD = {
-    ('2050', 2026, 4): Decimal('75720.04'),
-    ('2060', 2026, 4): Decimal('47375.96'),
-}
 
 
 def _apply_style(root):
@@ -266,11 +280,6 @@ def _find_raw_files(raw_dir, payroll_year=None, payroll_month=None):
         if file_year == payroll_year and file_month == payroll_month:
             matched.append(path)
     return matched
-
-
-def _find_bank_files(bank_dir):
-    return sorted(glob.glob(os.path.join(bank_dir, BANK_FILE_PATTERN)))
-
 
 def _build_company_output_path(base_dir, company, payroll_year, payroll_month, input_path):
     post_year, post_month = _shift_month(payroll_year, payroll_month, 1)
@@ -1031,61 +1040,6 @@ def _write_run_artifacts(
     }
 
 
-def _is_blank(value):
-    return value is None or (isinstance(value, str) and value.strip() == '')
-
-
-def _normalize_text(value):
-    if value is None:
-        return ''
-    text = str(value).replace('\r', ' ').replace('\n', ' ').replace('\t', ' ')
-    text = text.replace('\u3000', ' ').replace('\xa0', ' ')
-    return ' '.join(text.split()).strip()
-
-
-def _is_total_row(value):
-    return _normalize_text(value) == '总计'
-
-
-def _is_blank_project(value):
-    text = _normalize_text(value)
-    blank_texts = {
-        '',
-        '空白',
-        '(空白)',
-        '（空白）',
-        '(空 白)',
-        '（空 白）',
-    }
-    return text in blank_texts
-
-
-def _to_decimal(value):
-    if value is None or value == '':
-        return Decimal('0')
-    return Decimal(str(value))
-
-
-def _to_money(value):
-    return _to_decimal(value).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-
-
-def _to_text_money(value):
-    return f'{_to_money(value):.2f}'
-
-
-def _format_code(value):
-    if value is None:
-        return ''
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        if value.is_integer():
-            return str(int(value))
-        return str(value)
-    return _normalize_text(value)
-
-
 def _allocate_amount_by_weights(total_amount, weighted_items):
     total_amount = _to_money(total_amount)
     positive_items = [(key, _to_decimal(weight)) for key, weight in weighted_items if _to_decimal(weight) > Decimal('0')]
@@ -1116,25 +1070,6 @@ def _allocate_amount_by_weights(total_amount, weighted_items):
         allocations[key] += cent
 
     return {key: amount.quantize(cent) for key, amount in allocations.items() if amount != Decimal('0.00')}
-
-
-def _extract_year_month(value):
-    if isinstance(value, (datetime, date)):
-        return int(value.year), int(value.month)
-
-    text = _normalize_text(value)
-    if not text:
-        return None
-
-    match = re.search(r'(\d{4})[-/年](\d{1,2})', text)
-    if match:
-        return int(match.group(1)), int(match.group(2))
-
-    match = re.search(r'(\d{4})(\d{2})', text)
-    if match:
-        return int(match.group(1)), int(match.group(2))
-
-    return None
 
 
 def _extract_payroll_period(input_path):
@@ -1629,26 +1564,6 @@ def _build_bonus_department_amounts(company, payroll_year, payroll_month, bonus_
     }
 
 
-def _copy_cell_style(source_cell, target_cell):
-    target_cell._style = copy(source_cell._style)
-
-
-def _copy_font_red(cell):
-    font = copy(cell.font)
-    font.color = ERROR_FONT_COLOR
-    cell.font = font
-
-
-def _mark_row_red(ws, row_idx, max_col):
-    for col_idx in range(1, max_col + 1):
-        _copy_font_red(ws.cell(row=row_idx, column=col_idx))
-
-
-def _mark_range_red(ws, row_idx, start_col, end_col):
-    for col_idx in range(start_col, end_col + 1):
-        _copy_font_red(ws.cell(row=row_idx, column=col_idx))
-
-
 def _load_mappings(mapping_path):
     """仅从 Mapping 读取成本中心；内部订单由工时数据.xlsx 匹配。"""
     wb = load_workbook(mapping_path, data_only=True)
@@ -1680,162 +1595,6 @@ def _build_cost_center_reverse_map(cost_center_map):
             if cc and dept_text and cc not in reverse_map[company]:
                 reverse_map[company][cc] = dept_text
     return reverse_map
-
-
-def _normalize_bank_date_key(value):
-    if isinstance(value, datetime):
-        return value.date().isoformat()
-    if isinstance(value, date):
-        return value.isoformat()
-    return _normalize_text(value)
-
-
-def _load_bank_records_with_stats(bank_dir):
-    bank_records = {}
-    seen_rows = set()
-    source_files = _find_bank_files(bank_dir)
-    stats = {
-        'source_file_count': len(source_files),
-        'scanned_row_count': 0,
-        'deduped_row_count': 0,
-        'kept_row_count': 0,
-    }
-
-    for path in source_files:
-        wb = load_workbook(path, data_only=True, read_only=True)
-        ws = wb[wb.sheetnames[0]]
-
-        for row_idx in range(2, ws.max_row + 1):
-            company_code = _format_code(ws.cell(row=row_idx, column=2).value)
-            bank_account = _format_code(ws.cell(row=row_idx, column=3).value)
-            trans_date = ws.cell(row=row_idx, column=4).value
-            trans_period = _extract_year_month(trans_date)
-            payment_name = _normalize_text(ws.cell(row=row_idx, column=13).value)
-            outgoing_amt = _to_money(ws.cell(row=row_idx, column=15).value)
-            usage = _normalize_text(ws.cell(row=row_idx, column=16).value)
-            bank_subject = _format_code(ws.cell(row=row_idx, column=34).value)
-
-            if not company_code or trans_period is None:
-                continue
-
-            stats['scanned_row_count'] += 1
-            row_identity = (
-                company_code,
-                _normalize_bank_date_key(trans_date),
-                outgoing_amt,
-                usage,
-                payment_name,
-                bank_subject,
-            )
-            if row_identity in seen_rows:
-                stats['deduped_row_count'] += 1
-                continue
-            seen_rows.add(row_identity)
-
-            key = (company_code, trans_period[0], trans_period[1])
-            bank_records.setdefault(key, []).append(
-                {
-                    'file': os.path.basename(path),
-                    'row_idx': row_idx,
-                    'company_code': company_code,
-                    'bank_account': bank_account,
-                    'trans_date': trans_date,
-                    'payment_name': payment_name,
-                    'outgoing_amt': outgoing_amt,
-                    'usage': usage,
-                    'bank_subject': bank_subject,
-                }
-            )
-            stats['kept_row_count'] += 1
-
-    return {'records': bank_records, 'stats': stats}
-
-
-def _load_bank_records(bank_dir):
-    return _load_bank_records_with_stats(bank_dir)['records']
-
-
-def _summarize_bank_records(bank_records, company_code, year, month):
-    records = bank_records.get((company_code, year, month), [])
-    salary_records = [record for record in records if '代发工资' in record['usage']]
-    salary_amount = sum((record['outgoing_amt'] for record in salary_records), Decimal('0.00'))
-    fund_amount = sum(
-        (
-            record['outgoing_amt']
-            for record in records
-            if '北京住房公积金管理中心' in record['payment_name']
-        ),
-        Decimal('0.00'),
-    )
-    treasury_records = _get_treasury_records(records)
-    treasury_amount = sum((record['outgoing_amt'] for record in treasury_records), Decimal('0.00'))
-
-    return {
-        'salary': salary_amount,
-        'salary_records': salary_records,
-        'fund': fund_amount,
-        'tax': Decimal('0.00'),
-        'social': Decimal('0.00'),
-        'treasury': treasury_amount,
-        'treasury_records': treasury_records,
-        'files': sorted({record['file'] for record in records}),
-        'accounts': sorted({record['bank_account'] for record in records if record['bank_account']}),
-        'record_count': len(records),
-    }
-
-
-def _match_bank_record_combination(records, target_amount, label):
-    target = _to_money(target_amount)
-    if not records:
-        return {
-            'matched': False,
-            'matched_amount': Decimal('0.00'),
-            'all_amount': Decimal('0.00'),
-            'matched_records': [],
-            'note': f'未找到{label}',
-        }
-
-    all_amount = sum((record['outgoing_amt'] for record in records), Decimal('0.00'))
-    max_size = min(MAX_BANK_MATCH_COMBO_SIZE, len(records))
-    for size in range(1, max_size + 1):
-        for combo in combinations(records, size):
-            combo_amount = sum((record['outgoing_amt'] for record in combo), Decimal('0.00'))
-            if combo_amount == target:
-                combo_desc = ' + '.join(str(record['outgoing_amt']) for record in combo)
-                return {
-                    'matched': True,
-                    'matched_amount': combo_amount,
-                    'all_amount': all_amount,
-                    'matched_records': list(combo),
-                    'note': f'匹配到 {size} 条{label}组合：{combo_desc}',
-                }
-
-    return {
-        'matched': False,
-        'matched_amount': all_amount,
-        'all_amount': all_amount,
-        'matched_records': [],
-        'note': f'未找到匹配组合；全部{label}合计={all_amount}',
-    }
-
-
-def _match_salary_combination(salary_records, target_amount):
-    return _match_bank_record_combination(salary_records, target_amount, '代发工资')
-
-
-def _get_treasury_records(records):
-    return sorted(
-        [
-            record
-            for record in records
-            if '国家金库北京市分库' in record['payment_name'] and record['outgoing_amt'] > 0
-        ],
-        key=lambda item: (_normalize_bank_date_key(item['trans_date']), item['row_idx'], item['outgoing_amt']),
-    )
-
-
-def _match_treasury_combination(records, target_amount, label):
-    return _match_bank_record_combination(_get_treasury_records(records), target_amount, label)
 
 
 def _get_bonus_tax_adjustment(company_code, payment_year, payment_month):
@@ -3421,25 +3180,6 @@ def _clear_bank_summary(ws, end_row=12):
             ws.cell(row=row_idx, column=col_idx).value = None
 
 
-def _find_total_row(ws):
-    for row_idx in range(1, ws.max_row + 1):
-        if _is_total_row(ws.cell(row=row_idx, column=1).value):
-            return row_idx
-    return None
-
-
-def _recalculate_total_row(ws, total_row_idx):
-    ws.cell(row=total_row_idx, column=1).value = '总计'
-    for col_idx in range(2, 21):
-        ws.cell(row=total_row_idx, column=col_idx).value = None
-
-    for col_idx in range(5, 19):
-        total_value = sum((_to_decimal(ws.cell(row=row_idx, column=col_idx).value) for row_idx in range(3, total_row_idx)), Decimal('0'))
-        ws.cell(row=total_row_idx, column=col_idx).value = float(
-            total_value.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-        )
-
-
 def _save_company_workbooks(base_wb, base_dir, input_path, payroll_year, payroll_month, company_results, log):
     buffer = io.BytesIO()
     base_wb.save(buffer)
@@ -3898,5 +3638,3 @@ def fill_first_sheet_ab(input_path, base_dir, mapping_path, bank_dir, log, run_o
         'voucher_validation_summary': voucher_validation_summary,
         'artifact_paths': artifact_paths,
     }
-
-

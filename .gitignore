@@ -19,6 +19,9 @@
 !模版性文件/**/*.pyw
 !模版性文件/**/*.md
 !模版性文件/**/*.html
+!tests/
+!tests/**/
+!tests/**/*.py
 
 __pycache__/
 *.pyc

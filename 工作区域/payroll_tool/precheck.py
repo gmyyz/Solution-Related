@@ -4,6 +4,13 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from openpyxl import load_workbook
 
+from .banking import (
+    _find_bank_files,
+    _load_bank_records_with_stats,
+    _match_bank_record_combination,
+    _match_salary_combination,
+    _summarize_bank_records,
+)
 from .core import (
     COMPANY_NAME_TO_CODE,
     _build_a1_rows,
@@ -17,11 +24,7 @@ from .core import (
     _build_a9_rows,
     _build_a10_rows,
     _build_bonus_department_amounts,
-    _copy_cell_style,
-    _find_bank_files,
     _find_raw_files,
-    _find_total_row,
-    _format_code,
     _get_bank_dir,
     _get_bonus_path,
     _get_bonus_tax_adjustment,
@@ -30,24 +33,13 @@ from .core import (
     _get_raw_dir,
     _get_shared_expense_path,
     _get_timesheet_path,
-    _is_blank,
-    _is_total_row,
-    _load_bank_records_with_stats,
     _load_bonus_context,
     _load_co_workorder_context,
     _load_mappings,
     _load_shared_expense_context,
     _load_timesheet_match_context,
     _lookup_internal_order_from_timesheet,
-    _match_bank_record_combination,
-    _mark_row_red,
-    _match_salary_combination,
     _match_timesheet_internal_orders,
-    _normalize_text,
-    _recalculate_total_row,
-    _summarize_bank_records,
-    _to_decimal,
-    _to_money,
     _validate_cross_group_accounts,
     _validate_voucher_groups,
     _write_utf8_file,
@@ -64,6 +56,18 @@ from .options import (
     requires_bonus_data,
     requires_co_data,
     requires_shared_expense_data,
+)
+from .workbook_utils import (
+    _copy_cell_style,
+    _find_total_row,
+    _format_code,
+    _is_blank,
+    _is_total_row,
+    _mark_row_red,
+    _normalize_text,
+    _recalculate_total_row,
+    _to_decimal,
+    _to_money,
 )
 
 

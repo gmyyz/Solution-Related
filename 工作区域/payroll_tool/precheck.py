@@ -24,6 +24,7 @@ from .core import (
     _format_code,
     _get_bank_dir,
     _get_bonus_path,
+    _get_bonus_tax_adjustment,
     _get_co_workorder_path,
     _get_mapping_path,
     _get_raw_dir,
@@ -38,6 +39,7 @@ from .core import (
     _load_shared_expense_context,
     _load_timesheet_match_context,
     _lookup_internal_order_from_timesheet,
+    _match_bank_record_combination,
     _mark_row_red,
     _match_salary_combination,
     _match_timesheet_internal_orders,
@@ -48,12 +50,14 @@ from .core import (
     _to_money,
     _validate_cross_group_accounts,
     _validate_voucher_groups,
+    _write_utf8_file,
 )
 from .options import (
     ACTUAL_VOUCHERS,
     BONUS_VOUCHERS,
     COMPANY_OPTIONS,
     RunOptions,
+    build_batch_layout_from_options,
     format_period_label,
     normalize_run_options,
     requires_bank_data,
@@ -75,9 +79,144 @@ def _append_line(lines, status, text):
     lines.append({'status': status, 'text': text})
 
 
+def _render_markdown_table(headers, rows):
+    lines = ['| ' + ' | '.join(headers) + ' |', '| ' + ' | '.join(['---'] * len(headers)) + ' |']
+    for row in rows:
+        lines.append('| ' + ' | '.join(str(item) for item in row) + ' |')
+    return '\n'.join(lines)
+
+
+def _render_markdown_list(items, empty_text='无'):
+    if not items:
+        return f'- {empty_text}'
+    return '\n'.join(f'- {item}' for item in items)
+
+
+def _status_label(status):
+    mapping = {
+        'ok': '通过',
+        'warn': '预警',
+        'warning': '预警',
+        'error': '阻断',
+        'err': '阻断',
+        'info': '信息',
+    }
+    return mapping.get(status, status or '信息')
+
+
+def _write_precheck_report(layout, run_options, result, input_checks):
+    report_path = os.path.join(layout.archive_root, f'{layout.batch_code}-预检报告.md')
+    summary_rows = [
+        ('总体状态', _status_label(result.get('overall_status', 'info'))),
+        ('是否可运行', '是' if result.get('can_run') else '否'),
+        ('阻断项数量', len(result.get('blockers', []))),
+        ('预警项数量', len(result.get('warnings', []))),
+    ]
+    input_rows = [
+        (
+            item['name'],
+            '必须' if item['required'] else '按需',
+            '已就绪' if item['exists'] else '未就绪',
+            item['path'],
+            item['note'],
+        )
+        for item in input_checks
+    ]
+    company_rows = []
+    voucher_sections = []
+    for company, company_data in result.get('company_checks', {}).items():
+        company_rows.append(
+            (
+                company,
+                _status_label(company_data.get('status', 'info')),
+                len(company_data.get('blockers', [])),
+                len(company_data.get('warnings', [])),
+            )
+        )
+        voucher_rows = []
+        for voucher_id, voucher_info in company_data.get('voucher_status', {}).items():
+            voucher_rows.append((voucher_id, _status_label(voucher_info.get('status', 'info')), voucher_info.get('message', '')))
+        voucher_sections.extend(
+            [
+                f'### {company}',
+                '',
+                _render_markdown_table(['凭证', '结果', '说明'], voucher_rows or [('无', '无', '无')]),
+                '',
+            ]
+        )
+    content = '\n'.join(
+        [
+            f'# {layout.batch_name} 预检报告',
+            '',
+            '## 执行结论',
+            '',
+            f'- 总结：`{result.get("summary", "预检完成")}`',
+            f'- 可运行：`{"是" if result.get("can_run") else "否"}`',
+            f'- 总体状态：`{_status_label(result.get("overall_status", "info"))}`',
+            '',
+            '## 批次范围',
+            '',
+            _render_markdown_table(
+                ['项目', '值'],
+                [
+                    ('处理月份', run_options.processing_label),
+                    ('工资所属月份', run_options.payroll_label),
+                    ('公司范围', '、'.join(run_options.companies) or '未选'),
+                    ('凭证范围', '、'.join(run_options.vouchers) or '未选'),
+                    ('预检报告路径', report_path),
+                ],
+            ),
+            '',
+            '## 预检摘要',
+            '',
+            _render_markdown_table(['项目', '结果'], summary_rows),
+            '',
+            '## 输入资料状态',
+            '',
+            _render_markdown_table(['资料', '要求', '状态', '路径', '说明'], input_rows),
+            '',
+            '## 风险清单',
+            '',
+            '### 阻断项',
+            '',
+            _render_markdown_list(result.get('blockers', []), empty_text='无'),
+            '',
+            '### 预警项',
+            '',
+            _render_markdown_list(result.get('warnings', []), empty_text='无'),
+            '',
+            '## 公司级结果',
+            '',
+            _render_markdown_table(['公司', '状态', '阻断项', '预警项'], company_rows or [('无', '无', '0', '0')]),
+            '',
+            '## 凭证级结果',
+            '',
+        ]
+        + voucher_sections
+        + [
+            '',
+            '## 详细检查日志',
+            '',
+            _render_markdown_list([item['text'] for item in result.get('display_lines', [])], empty_text='无详细日志'),
+            '',
+            '## 使用说明',
+            '',
+            '- 本文档用于回答“现在能不能跑、风险点在哪、每家公司每张凭证是否具备生成条件”。',
+            '- 若存在阻断项，应先处理阻断项，再重新执行预检。',
+            '',
+        ]
+        + ['']
+    )
+    _write_utf8_file(report_path, content)
+    return report_path
+
+
 def collect_input_health(base_dir, mapping_path, bank_dir, run_options):
     run_options = normalize_run_options(run_options)
-    raw_dir = _get_raw_dir(base_dir)
+    layout = build_batch_layout_from_options(base_dir, run_options)
+    mapping_path = mapping_path or layout.mapping_path
+    bank_dir = bank_dir or layout.bank_dir
+    raw_dir = layout.raw_dir
     payroll_period = run_options.payroll_period
     raw_files = _find_raw_files(raw_dir, payroll_period[0], payroll_period[1])
     checks = []
@@ -105,10 +244,10 @@ def collect_input_health(base_dir, mapping_path, bank_dir, run_options):
     )
     add_check('Mapping表.xlsx', mapping_path, True, os.path.exists(mapping_path), '部门映射与成本中心来源', '全部')
 
-    timesheet_path = _get_timesheet_path(base_dir)
+    timesheet_path = _get_timesheet_path(base_dir, run_options.processing_year, run_options.processing_month)
     add_check('工时数据.xlsx', timesheet_path, True, os.path.exists(timesheet_path), '内部订单与工时分摊来源', '全部')
 
-    bonus_path = _get_bonus_path(base_dir)
+    bonus_path = _get_bonus_path(base_dir, run_options.processing_year, run_options.processing_month)
     add_check(
         '年终奖计提文件',
         bonus_path,
@@ -330,6 +469,9 @@ def _build_company_preview_workbooks(base_wb, selected_companies):
 
 def run_startup_precheck(base_dir, mapping_path, bank_dir, run_options):
     run_options = normalize_run_options(run_options)
+    layout = build_batch_layout_from_options(base_dir, run_options)
+    mapping_path = mapping_path or layout.mapping_path
+    bank_dir = bank_dir or layout.bank_dir
     result = {
         'run_options': {
             'companies': list(run_options.companies),
@@ -347,6 +489,7 @@ def run_startup_precheck(base_dir, mapping_path, bank_dir, run_options):
         'company_checks': {},
         'display_lines': [],
         'bank_scan_stats': {},
+        'report_path': '',
     }
     lines = result['display_lines']
 
@@ -381,12 +524,13 @@ def run_startup_precheck(base_dir, mapping_path, bank_dir, run_options):
         result['summary'] = f'存在 {len(result["blockers"])} 个阻断项'
         for blocker in result['blockers']:
             _append_line(lines, 'err', blocker)
+        result['report_path'] = _write_precheck_report(layout, run_options, result, result['input_checks'])
         return result
 
     cost_center_map = _load_mappings(mapping_path)
     _append_line(lines, 'ok', 'Mapping 表读取通过')
 
-    timesheet_path = _get_timesheet_path(base_dir)
+    timesheet_path = _get_timesheet_path(base_dir, run_options.processing_year, run_options.processing_month)
     project_index, timesheet_match_summary = _match_timesheet_internal_orders(timesheet_path, save_changes=False)
     if timesheet_match_summary['unmatched_rows']:
         result['blockers'].append(
@@ -395,6 +539,7 @@ def run_startup_precheck(base_dir, mapping_path, bank_dir, run_options):
         _append_line(lines, 'err', result['blockers'][-1])
         result['overall_status'] = 'error'
         result['summary'] = f'存在 {len(result["blockers"])} 个阻断项'
+        result['report_path'] = _write_precheck_report(layout, run_options, result, result['input_checks'])
         return result
     _append_line(
         lines,
@@ -407,7 +552,10 @@ def run_startup_precheck(base_dir, mapping_path, bank_dir, run_options):
 
     bonus_context = None
     if requires_bonus_data(run_options):
-        bonus_context = _load_bonus_context(_get_bonus_path(base_dir), cost_center_map)
+        bonus_context = _load_bonus_context(
+            _get_bonus_path(base_dir, run_options.processing_year, run_options.processing_month),
+            cost_center_map,
+        )
         _append_line(lines, 'ok', '奖金数据读取通过')
 
     bank_records = {}
@@ -464,23 +612,45 @@ def run_startup_precheck(base_dir, mapping_path, bank_dir, run_options):
         if requires_bank_data(run_options):
             company_code = COMPANY_NAME_TO_CODE[company]
             salary_tax_bank = _summarize_bank_records(bank_records, company_code, next_year, next_month)
-            fund_bank = _summarize_bank_records(bank_records, company_code, next_year, next_month)
+            fund_reconcile_bank = _summarize_bank_records(bank_records, company_code, payroll_year, payroll_month)
+            fund_voucher_bank = _summarize_bank_records(bank_records, company_code, next_year, next_month)
             salary_match = _match_salary_combination(
                 salary_tax_bank['salary_records'],
                 payroll_summary['salary'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP),
             )
-            if run_options.wants_voucher('A1') and salary_tax_bank['social'] == Decimal('0.00'):
-                company_result['blockers'].append('A1 未找到社保对应银行流水')
-            if run_options.wants_voucher('A2') and fund_bank['fund'] == Decimal('0.00'):
+            tax_match = _match_bank_record_combination(
+                salary_tax_bank['treasury_records'],
+                (
+                    payroll_summary['tax']
+                    + _get_bonus_tax_adjustment(company_code, next_year, next_month)
+                ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP),
+                '个税国库流水',
+            )
+            social_match = _match_bank_record_combination(
+                salary_tax_bank['treasury_records'],
+                payroll_summary['social'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP),
+                '社保国库流水',
+            )
+            if run_options.wants_voucher('A1') and not social_match['matched']:
+                company_result['blockers'].append(f'A1 未找到匹配社保金额的银行流水组合：{social_match["note"]}')
+            if run_options.wants_voucher('A2') and fund_voucher_bank['fund'] == Decimal('0.00'):
                 company_result['blockers'].append('A2 未找到公积金对应银行流水')
-            if run_options.wants_voucher('A3') and (not salary_tax_bank['salary_records'] or salary_tax_bank['tax'] == Decimal('0.00')):
-                company_result['blockers'].append('A3 缺少工资组合或个税流水')
+            if run_options.wants_voucher('A3') and (not salary_match['matched'] or not tax_match['matched']):
+                company_result['blockers'].append(f'A3 缺少匹配的工资组合或个税组合：工资={salary_match["note"]}；个税={tax_match["note"]}')
 
             bank_checks = [
                 ('工资', payroll_summary['salary'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP), salary_match['matched_amount'], salary_match['matched']),
-                ('公积金', payroll_summary['fund'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP), fund_bank['fund'], payroll_summary['fund'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP) == fund_bank['fund'] or (company_code == '2050' and payroll_year == 2026 and payroll_month == 2 and abs(payroll_summary['fund'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP) - fund_bank['fund']) == Decimal('3650.00'))),
-                ('个税', payroll_summary['tax'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP), salary_tax_bank['tax'], payroll_summary['tax'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP) == salary_tax_bank['tax']),
-                ('社保', payroll_summary['social'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP), salary_tax_bank['social'], payroll_summary['social'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP) == salary_tax_bank['social']),
+                ('公积金', payroll_summary['fund'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP), fund_reconcile_bank['fund'], payroll_summary['fund'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP) == fund_reconcile_bank['fund'] or (company_code == '2050' and payroll_year == 2026 and payroll_month == 2 and abs(payroll_summary['fund'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP) - fund_reconcile_bank['fund']) == Decimal('3650.00'))),
+                (
+                    '个税',
+                    (
+                        payroll_summary['tax']
+                        + _get_bonus_tax_adjustment(company_code, next_year, next_month)
+                    ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP),
+                    tax_match['matched_amount'],
+                    tax_match['matched'],
+                ),
+                ('社保', payroll_summary['social'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP), social_match['matched_amount'], social_match['matched']),
             ]
             for label, payroll_amount, bank_amount, passed in bank_checks:
                 if not passed:
@@ -570,4 +740,5 @@ def run_startup_precheck(base_dir, mapping_path, bank_dir, run_options):
         result['summary'] = f'可运行，但有 {len(result["warnings"])} 个预警项'
     else:
         result['summary'] = '预检通过，可直接运行'
+    result['report_path'] = _write_precheck_report(layout, run_options, result, result['input_checks'])
     return result

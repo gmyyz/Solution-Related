@@ -37,6 +37,7 @@ from .options import (
     VOUCHER_LABELS,
     VOUCHER_PRESETS,
     RunOptions,
+    build_batch_layout_from_options,
     get_default_processing_period,
     requires_bank_data,
     requires_bonus_data,
@@ -187,12 +188,16 @@ class MainWindow:
             posting_month=posting_month,
         )
 
+    def _get_batch_layout(self, run_options):
+        return build_batch_layout_from_options(self._base_dir, run_options)
+
     def _current_selection_signature(self):
         options = self._get_run_options()
         return options.processing_year, options.processing_month, options.companies, options.vouchers
 
     def _get_raw_files_for_selection(self, run_options):
-        return _find_raw_files(self._raw_dir, run_options.payroll_year, run_options.payroll_month)
+        layout = self._get_batch_layout(run_options)
+        return _find_raw_files(layout.raw_dir, run_options.payroll_year, run_options.payroll_month)
 
     def _mark_precheck_stale(self):
         self._precheck_result = None
@@ -436,6 +441,7 @@ class MainWindow:
 
     def _collect_missing_inputs(self, run_options, raw_files):
         missing = []
+        layout = self._get_batch_layout(run_options)
         payroll_period = run_options.payroll_period
         if not run_options.companies:
             missing.append('至少选择 1 家公司')
@@ -443,13 +449,13 @@ class MainWindow:
             missing.append('至少选择 1 张凭证')
         if len(raw_files) != 1:
             missing.append(f'工资单目录下必须且只能有 1 份 {run_options.payroll_label} 的原始工资单')
-        if not os.path.exists(self._mapping_path):
+        if not os.path.exists(layout.mapping_path):
             missing.append('缺少 Mapping表.xlsx')
-        if not os.path.exists(self._timesheet_path):
+        if not os.path.exists(layout.timesheet_path):
             missing.append('缺少 工时数据.xlsx')
-        if requires_bonus_data(run_options) and not os.path.exists(self._bonus_path):
+        if requires_bonus_data(run_options) and not os.path.exists(layout.bonus_path):
             missing.append('A7/A8 需要 年终奖计提文件')
-        if requires_bank_data(run_options) and not _find_bank_files(self._bank_dir):
+        if requires_bank_data(run_options) and not _find_bank_files(layout.bank_dir):
             missing.append('A1-A3 需要 银行流水 文件')
         if run_options.wants_voucher('A9') and '耐数电子' not in run_options.companies:
             missing.append('A9 仅适用于耐数电子，请勾选 2050')
@@ -467,13 +473,14 @@ class MainWindow:
         for widget in self._checklist_section.winfo_children():
             widget.destroy()
 
+        layout = self._get_batch_layout(run_options)
         payroll_period = run_options.payroll_period
         co_path = _get_co_workorder_path(self._base_dir, payroll_period[0], payroll_period[1])
         shared_path = _get_shared_expense_path(self._base_dir, payroll_period[0], payroll_period[1])
-        mapping_exists = os.path.exists(self._mapping_path)
-        timesheet_exists = os.path.exists(self._timesheet_path)
-        bonus_exists = os.path.exists(self._bonus_path)
-        bank_exists = len(_find_bank_files(self._bank_dir)) > 0
+        mapping_exists = os.path.exists(layout.mapping_path)
+        timesheet_exists = os.path.exists(layout.timesheet_path)
+        bonus_exists = os.path.exists(layout.bonus_path)
+        bank_exists = len(_find_bank_files(layout.bank_dir)) > 0
         co_exists = bool(co_path) and os.path.exists(co_path)
         shared_exists = bool(shared_path) and os.path.exists(shared_path)
 
@@ -483,7 +490,10 @@ class MainWindow:
                 '必须',
                 COLOR_DANGER,
                 '#3A1A1A',
-                os.path.join('原始数据', '工资单', f'人力成本研发项目分摊{payroll_period[0]}{payroll_period[1]:02d} - to财务-原始.xlsx'),
+                os.path.join(
+                    os.path.relpath(layout.raw_dir, self._base_dir),
+                    f'人力成本研发项目分摊{payroll_period[0]}{payroll_period[1]:02d} - to财务-原始.xlsx',
+                ),
                 '✓ 已找到' if len(raw_files) == 1 else ('✗ 未找到' if not raw_files else '✗ 找到多个'),
                 '#000000' if len(raw_files) == 1 else '#FFFFFF',
                 COLOR_SUCCESS if len(raw_files) == 1 else COLOR_DANGER,
@@ -493,7 +503,7 @@ class MainWindow:
                 '必须',
                 COLOR_DANGER,
                 '#3A1A1A',
-                'Mapping表.xlsx',
+                os.path.relpath(layout.mapping_path, self._base_dir),
                 '✓ 已找到' if mapping_exists else '✗ 未找到',
                 '#000000' if mapping_exists else '#FFFFFF',
                 COLOR_SUCCESS if mapping_exists else COLOR_DANGER,
@@ -503,7 +513,7 @@ class MainWindow:
                 '必须',
                 COLOR_DANGER,
                 '#3A1A1A',
-                os.path.join('原始数据', '工时数据', '工时数据.xlsx'),
+                os.path.relpath(layout.timesheet_path, self._base_dir),
                 '✓ 已找到' if timesheet_exists else '✗ 未找到',
                 '#000000' if timesheet_exists else '#FFFFFF',
                 COLOR_SUCCESS if timesheet_exists else COLOR_DANGER,
@@ -513,7 +523,7 @@ class MainWindow:
                 '必须' if requires_bank_data(run_options) else '按需',
                 COLOR_DANGER if requires_bank_data(run_options) else '#000000',
                 '#3A1A1A' if requires_bank_data(run_options) else COLOR_WARNING,
-                os.path.join('原始数据', '银行流水', BANK_FILE_PATTERN),
+                os.path.join(os.path.relpath(layout.bank_dir, self._base_dir), BANK_FILE_PATTERN),
                 '✓ 已找到' if bank_exists else ('✗ 未找到' if requires_bank_data(run_options) else '· 未提供'),
                 '#000000' if bank_exists else '#FFFFFF',
                 COLOR_SUCCESS if bank_exists else (COLOR_DANGER if requires_bank_data(run_options) else '#666666'),
@@ -523,7 +533,7 @@ class MainWindow:
                 '必须' if requires_bonus_data(run_options) else '按需',
                 COLOR_DANGER if requires_bonus_data(run_options) else '#000000',
                 '#3A1A1A' if requires_bonus_data(run_options) else COLOR_WARNING,
-                os.path.join('原始数据', '奖金数据', '年终奖计提2026_ - to财务.xlsx'),
+                os.path.relpath(layout.bonus_path, self._base_dir),
                 '✓ 已找到' if bonus_exists else ('✗ 未找到' if requires_bonus_data(run_options) else '· 未提供'),
                 '#000000' if bonus_exists else '#FFFFFF',
                 COLOR_SUCCESS if bonus_exists else (COLOR_DANGER if requires_bonus_data(run_options) else '#666666'),
@@ -533,7 +543,7 @@ class MainWindow:
                 '必须' if run_options.wants_voucher('A9') else '按需',
                 COLOR_DANGER if run_options.wants_voucher('A9') else '#000000',
                 '#3A1A1A' if run_options.wants_voucher('A9') else COLOR_WARNING,
-                os.path.join('耐数电子', run_options.processing_yymm, 'CO工单分摊', 'CO工单分摊.xlsx'),
+                os.path.relpath(co_path, self._base_dir),
                 '✓ 已找到' if co_exists else ('✗ 未找到' if run_options.wants_voucher('A9') else '· 未提供'),
                 '#000000' if co_exists else '#FFFFFF',
                 COLOR_SUCCESS if co_exists else (COLOR_DANGER if run_options.wants_voucher('A9') else '#666666'),
@@ -543,7 +553,7 @@ class MainWindow:
                 '必须' if requires_shared_expense_data(run_options) else '按需',
                 COLOR_DANGER if requires_shared_expense_data(run_options) else '#000000',
                 '#3A1A1A' if requires_shared_expense_data(run_options) else COLOR_WARNING,
-                os.path.join('原始数据', '待分摊费用', f'待分摊费用{run_options.processing_yymm}.xlsx'),
+                os.path.relpath(shared_path, self._base_dir),
                 '✓ 已找到' if shared_exists else ('✗ 未找到' if requires_shared_expense_data(run_options) else '· 未提供'),
                 '#000000' if shared_exists else '#FFFFFF',
                 COLOR_SUCCESS if shared_exists else (COLOR_DANGER if requires_shared_expense_data(run_options) else '#666666'),
@@ -591,18 +601,22 @@ class MainWindow:
         for widget in self._paths_section.winfo_children():
             widget.destroy()
 
+        layout = self._get_batch_layout(run_options)
         path_lines = [
             f'当前处理月份：{run_options.processing_label}',
             f'对应工资所属月份：{run_options.payroll_label}',
-            f'工资单目录：{self._raw_dir}',
-            f'Mapping 表：{self._mapping_path}',
-            f'银行流水目录：{self._bank_dir}（全目录扫描后按处理月份筛选）',
-            f'工时数据：{self._timesheet_path}',
-            f'奖金数据：{self._bonus_path}',
+            f'月度输入目录：{layout.monthly_input_root}',
+            f'运行输出目录：{layout.run_output_root}',
+            f'留痕归档目录：{layout.archive_root}',
+            f'工资单目录：{layout.raw_dir}',
+            f'Mapping 表：{layout.mapping_path}',
+            f'银行流水目录：{layout.bank_dir}（全目录扫描后按处理月份筛选）',
+            f'工时数据：{layout.timesheet_path}',
+            f'奖金数据：{layout.bonus_path}',
         ]
         if raw_files:
             show_name = os.path.basename(raw_files[0]) if len(raw_files) == 1 else '；'.join(os.path.basename(p) for p in raw_files[:2])
-            path_lines.insert(3, f'当前识别工资单：{show_name}')
+            path_lines.insert(4, f'当前识别工资单：{show_name}')
         payroll_period = run_options.payroll_period
         co_path = _get_co_workorder_path(self._base_dir, payroll_period[0], payroll_period[1])
         shared_path = _get_shared_expense_path(self._base_dir, payroll_period[0], payroll_period[1])
@@ -732,6 +746,9 @@ class MainWindow:
                 elif tag not in ('ok', 'warn', 'err'):
                     tag = 'info'
                 self._precheck_text.insert('end', item['text'] + '\n', tag)
+            report_path = self._precheck_result.get('report_path')
+            if report_path:
+                self._precheck_text.insert('end', f'\n预检报告已写入：{report_path}\n', 'info')
         self._precheck_text.configure(state='disabled')
 
     def _start_precheck(self):
@@ -745,10 +762,11 @@ class MainWindow:
         self._refresh_footer()
 
         run_options = self._get_run_options()
+        layout = self._get_batch_layout(run_options)
 
         def worker():
             try:
-                result = run_startup_precheck(self._base_dir, self._mapping_path, self._bank_dir, run_options)
+                result = run_startup_precheck(self._base_dir, layout.mapping_path, layout.bank_dir, run_options)
             except Exception as exc:
                 result = {
                     'summary': str(exc),
@@ -842,13 +860,13 @@ class MainWindow:
         self._build_section_title(self._guide_content, '运行步骤')
 
         for num, text in [
-            ('①', '先确认处理月份，系统会自动匹配上一月唯一工资单'),
+            ('①', '先确认处理月份，系统会自动定位对应批次目录并匹配上一月唯一工资单'),
             ('②', '对首个工作表 A/B 列空白单元格按上一行非空值向下填充'),
             ('③', '校验 Q 列实发金额是否等于 E 列减 K:P 列个人承担金额'),
             ('④', '根据 Mapping 表生成 S 列成本中心，并根据工时数据生成 T 列内部订单'),
             ('⑤', '银行流水会扫描整个目录，并按当前处理月份筛选后自动去重'),
             ('⑥', '若工时项目未全部匹配到内部订单，则终止后续处理'),
-            ('⑦', '先检查当前选择的数据支撑情况，再生成所选公司与 A1-A10 凭证'),
+            ('⑦', '先检查当前选择的数据支撑情况，再生成所选公司与 A1-A10 凭证及留痕文件'),
         ]:
             row = tk.Frame(self._guide_content, bg=COLOR_BG, pady=3)
             row.pack(fill='x')
@@ -859,7 +877,7 @@ class MainWindow:
         tip.pack(fill='x', pady=(14, 0))
         tk.Label(
             tip,
-            text='输出文件会按公司拆分，保存到对应公司目录下的处理月份文件夹；工资单文件名仍沿用工资所属月份，凭证和 A9/A10 资料按处理月份定位，同名文件会直接替换',
+            text='输出结果会写入标准批次目录：月度输入、运行输出、归档留痕三层分开；工资单文件名仍沿用工资所属月份，凭证与留痕文件按处理月份和批次归档',
             font=('微软雅黑', 9),
             fg=COLOR_PRIMARY,
             bg='#252500',
@@ -992,6 +1010,7 @@ class MainWindow:
         if success and self._result:
             output_lines = [f'{company}：{path}' for company, path in self._result['output_paths'].items()]
             voucher_lines = [f'{company}：{path}' for company, path in self._result['voucher_paths'].items()]
+            artifact_paths = self._result.get('artifact_paths', {})
             voucher_validation = self._result.get('voucher_validation_summary', {})
             voucher_validation_lines = []
             for company, validation in voucher_validation.items():
@@ -1032,7 +1051,10 @@ class MainWindow:
                 f"行级异常总数：{self._result['issue_count']} 行\n"
                 f"凭证校验：\n" + ('\n'.join(voucher_validation_lines) if voucher_validation_lines else '未生成凭证') + '\n'
                 f"输出工资文件：\n" + ('\n'.join(output_lines) if output_lines else '未输出工资文件') + '\n'
-                f"输出凭证文件：\n" + ('\n'.join(voucher_lines) if voucher_lines else '未输出凭证文件')
+                f"输出凭证文件：\n" + ('\n'.join(voucher_lines) if voucher_lines else '未输出凭证文件') + '\n'
+                f"留痕文件：\n" + (
+                    '\n'.join(f'{name}：{path}' for name, path in artifact_paths.items()) if artifact_paths else '未生成留痕文件'
+                )
             )
             has_voucher_issue = any(
                 validation.get('cross_group_issues')
@@ -1084,6 +1106,7 @@ class MainWindow:
             return
 
         input_path = raw_files[0]
+        layout = self._get_batch_layout(run_options)
         payroll_year, payroll_month = run_options.payroll_period
         co_path = _get_co_workorder_path(self._base_dir, payroll_year, payroll_month)
         shared_path = _get_shared_expense_path(self._base_dir, payroll_year, payroll_month)
@@ -1097,20 +1120,22 @@ class MainWindow:
                 self._q.put(('step', 1, '检查输入文件'))
                 log(f'处理月份：{run_options.processing_label}')
                 log(f'工资所属月份：{run_options.payroll_label}')
+                log(f'批次目录：{layout.monthly_input_root}')
                 log(f'输入文件：{os.path.basename(input_path)}')
                 log('本次公司：' + '、'.join(run_options.companies))
                 log('本次凭证：' + '、'.join(run_options.vouchers))
-                log('输出位置：按公司拆分到对应公司/月份目录，同名文件直接替换')
-                log(f'Mapping 表：{os.path.basename(self._mapping_path)}')
-                log(f'工时数据：{self._timesheet_path}')
+                log(f'输出目录：{layout.run_output_root}')
+                log(f'留痕目录：{layout.archive_root}')
+                log(f'Mapping 表：{os.path.basename(layout.mapping_path)}')
+                log(f'工时数据：{layout.timesheet_path}')
                 if requires_bonus_data(run_options):
-                    log(f'奖金数据：{self._bonus_path}')
+                    log(f'奖金数据：{layout.bonus_path}')
                 if run_options.wants_voucher('A9'):
                     log(f'CO工单分摊：{co_path}')
                 if run_options.wants_voucher('A10'):
                     log(f'待分摊费用：{shared_path}')
                 if requires_bank_data(run_options):
-                    log(f'银行流水目录：{self._bank_dir}（全目录扫描，按处理月份筛选，完全相同行自动去重）')
+                    log(f'银行流水目录：{layout.bank_dir}（全目录扫描，按处理月份筛选，完全相同行自动去重）')
 
                 self._q.put(('step', 2, '填充首个工作表 A/B 列空白'))
                 self._q.put(('step', 3, '校验实发金额并匹配成本中心/内部订单'))
@@ -1118,8 +1143,8 @@ class MainWindow:
                 result = execute_payroll_run(
                     input_path,
                     self._base_dir,
-                    self._mapping_path,
-                    self._bank_dir,
+                    layout.mapping_path,
+                    layout.bank_dir,
                     log,
                     run_options=run_options,
                 )

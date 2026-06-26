@@ -446,13 +446,15 @@
       <h1>工资奖金自动化脚本介绍</h1>
       <p>
         本脚本面向财务月度工资奖金业务场景，能够从 HR 原始工资表出发，自动完成数据整理、映射校验、银行流水核对、SAP 标准凭证生成及公司拆分输出。
-        它不仅减少了手工汇总与重复检查的工作量，也把关键财务逻辑固化进脚本中，确保处理过程可重复、可追溯、可校验。当前版本还支持在运行前直接选择公司和 A1-A10 凭证子集，并先做启动页预检，不必每次都全量生成后才发现基础数据有问题。
+        它不仅减少了手工汇总与重复检查的工作量，也把关键财务逻辑固化进脚本中，确保处理过程可重复、可追溯、可校验。当前版本还支持以“月度批次”方式管理输入、输出和留痕，运行前可直接选择公司和 A1-A10 凭证子集，并先做启动页预检，不必每次都全量生成后才发现基础数据有问题。
       </p>
       <div class="tag-row">
         <div class="tag">自动识别数据源</div>
         <div class="tag">按公司拆分输出</div>
         <div class="tag">按公司与凭证多选生成</div>
+        <div class="tag">月度批次目录</div>
         <div class="tag">启动页预检</div>
+        <div class="tag">预检/运行留痕</div>
         <div class="tag">银行流水智能匹配</div>
         <div class="tag">SAP 标准凭证生成</div>
         <div class="tag">借贷平衡严格校验</div>
@@ -487,9 +489,21 @@
           <p>启动页新增 `检查当前选择` 按钮，会在正式运行前先做只读预检，提前展示工资单公式、S/T 匹配、银行核对、工时/KOK3、奖金、CO、A10 待分摊等支撑结果。</p>
         </div>
         <div class="card">
+          <h3>基础资料留档</h3>
+          <p>`工时数据.xlsx` 优先从 `01_基础资料/02_工时数据` 读取；每次正式运行会把当次版本复制到 `04_归档留痕` 的基础资料快照目录，便于后续追溯。</p>
+        </div>
+          <div class="card">
+            <h3>批次管理</h3>
+            <p>目录层新增 `基础资料 / 月度输入 / 运行输出 / 归档留痕` 四层结构，2603 已作为样板批次落地，后续月份可以直接复制使用。</p>
+          </div>
+        <div class="card">
           <h3>局部刷新</h3>
           <p>切换公司、凭证或快捷组合时，不再整页销毁后重建，而是局部刷新资料清单和运行按钮状态，减少 Windows 下明显的白色闪屏。</p>
         </div>
+          <div class="card">
+            <h3>过程留痕</h3>
+            <p>脚本除输出凭证外，还会同步生成输入清单、预检报告、运行日志、过程说明与输出清单，便于复核、交接和审计说明。</p>
+          </div>
       </div>
     </section>
 
@@ -511,6 +525,7 @@
               <li><span class="rule-strong">借方</span>：公司/个人承担养老、失业、工伤、医疗，对应应付职工薪酬科目。</li>
               <li><span class="rule-strong">贷方</span>：取次月银行流水中社保对应国库流水的银行科目，按实际流水逐行展开。</li>
               <li><span class="rule-strong">日期</span>：取匹配银行流水中的最后交易日期。</li>
+              <li><span class="rule-strong">凭证</span>：凭证类型固定 <code>KZ</code>，银行贷方原因代码固定 <code>202</code>。</li>
               <li><span class="rule-strong">校验</span>：工资表社保 7 列汇总必须与银行社保流水严格一致。</li>
             </ul>
           </div>
@@ -526,6 +541,7 @@
               <li><span class="rule-strong">借方</span>：`2211070001` 与 `2211070002`，按银行公积金总额拆分。</li>
               <li><span class="rule-strong">贷方</span>：取银行流水中“北京住房公积金管理中心”对应银行科目，按实际流水逐行展开。</li>
               <li><span class="rule-strong">日期</span>：取公积金流水最后交易日期。</li>
+              <li><span class="rule-strong">凭证</span>：凭证类型固定 <code>KZ</code>，银行贷方原因代码固定 <code>202</code>。</li>
               <li><span class="rule-strong">校验</span>：工资表公司+个人公积金应与对应月份银行公积金流水一致，特殊月份按预设差额规则处理。</li>
             </ul>
           </div>
@@ -538,10 +554,12 @@
           </div>
           <div class="voucher-body">
             <ul class="voucher-list">
-              <li><span class="rule-strong">借方</span>：劳务费、个人所得税、应付职工薪酬-薪酬。</li>
+              <li><span class="rule-strong">借方</span>：劳务费、个人所得税、应付职工薪酬-薪酬；其中 <code>2221070000</code> 借方为匹配到的银行个税扣除劳务费个税后的金额。</li>
+              <li><span class="rule-strong">劳务费个税</span>：劳务费个税也走银行流水；劳务费借方按 <code>E列</code> 税前金额入账，因此劳务费个税不重复进入 <code>2221070000</code> 借方。</li>
               <li><span class="rule-strong">贷方</span>：次月银行流水中匹配实发工资组合 + 个税流水，按银行流水逐行展开。</li>
               <li><span class="rule-strong">日期</span>：工资流水组合与个税流水中的最后交易日期。</li>
-              <li><span class="rule-strong">校验</span>：Q 列实发金额与代发工资组合匹配；个税与国库较小金额流水匹配。</li>
+              <li><span class="rule-strong">凭证</span>：凭证类型固定 <code>KZ</code>，银行贷方原因代码固定 <code>202</code>。</li>
+              <li><span class="rule-strong">校验</span>：Q 列实发金额与代发工资组合匹配；个税与国库流水组合匹配，4 月付款包含已确认的 3 月年终奖个税。</li>
             </ul>
           </div>
         </div>
@@ -586,6 +604,7 @@
               <li><span class="rule-strong">贷方</span>：原样冲回 A5 借方费用，科目不变、成本中心不变、内部订单为空。</li>
               <li><span class="rule-strong">借方</span>：按部门内项目工时占比分摊到内部订单，成本中心沿用原部门成本中心。</li>
               <li><span class="rule-strong">工时口径</span>：只取当月、只统计 `K&gt;0`，`OSD运营支持部` 不参与分摊。</li>
+              <li><span class="rule-strong">文本</span>：统一写为 `根据研发工时分摊计提的YYYY年M月人工费用`。</li>
               <li><span class="rule-strong">校验</span>：若非 OSD 部门没有可分摊工时，则不允许生成 A6；尾差自动回补到最后一个内部订单。</li>
             </ul>
           </div>
@@ -617,6 +636,7 @@
               <li><span class="rule-strong">贷方</span>：冲回 A7 的非 OSD 奖金费用。</li>
               <li><span class="rule-strong">借方</span>：按内部订单分摊奖金，成本中心保持不变。</li>
               <li><span class="rule-strong">工时口径</span>：1月只看1月工时，2月只看2月工时，3/6/9/12月看1-当月累计工时。</li>
+              <li><span class="rule-strong">文本</span>：统一写为 `根据研发工时分摊计提的期间年终奖`，例如 `根据研发工时分摊计提的2026Q1年终奖`。</li>
             </ul>
           </div>
         </div>
@@ -662,7 +682,7 @@
         <tbody>
           <tr>
             <td>基础数据完整性</td>
-            <td>工资单、Mapping 表、工时数据、年终奖数据、银行流水必须齐全；工时项目必须先全部匹配到内部订单，否则不允许继续处理。</td>
+            <td>工资单、Mapping 表、工时数据、年终奖数据、银行流水必须齐全；工时数据优先作为基础资料维护，并在正式运行时复制留档；工时项目必须先全部匹配到内部订单，否则不允许继续处理。</td>
           </tr>
           <tr>
             <td>公司隔离</td>
@@ -670,7 +690,7 @@
           </tr>
           <tr>
             <td>银行核对</td>
-            <td>工资、公积金、个税、社保四类项目分别核对；工资支持最多 5 笔代发工资组合匹配，差异结果直接反馈到输出文件。</td>
+            <td>工资、公积金、个税、社保四类项目分别核对；工资、个税、社保支持最多 6 笔银行流水组合匹配，差异结果直接反馈到输出文件。</td>
           </tr>
           <tr>
             <td>借贷平衡</td>
@@ -705,12 +725,12 @@
               </figure>
               <figure class="example-figure">
                 <img src="doc_assets/a1-bank-social.png" alt="A1银行流水示例">
-                <figcaption>银行流水：同批两条 <code>国家金库北京市分库</code> 流水中，金额较大的那条归属社保，金额较小的那条留给 A3 个税。</figcaption>
+                <figcaption>银行流水：同批 <code>国家金库北京市分库</code> 流水中，按工资表社保合计智能匹配对应组合。</figcaption>
               </figure>
             </div>
             <ul class="example-list">
               <li>校验关系：工资表社保七列合计 <code>211,246.82</code> ↔ 银行流水社保行 <code>O列 211,246.82</code>。</li>
-              <li>区分方式：同一批国库流水里，较小金额 <code>19,469.94</code> 属于个税，不计入 A1。</li>
+              <li>区分方式：同一批国库流水里，脚本遍历最多 6 笔组合，匹配社保合计的流水进入 A1。</li>
             </ul>
           </div>
         </div>
@@ -741,7 +761,7 @@
         <div class="example-card">
           <div class="example-head">
             <h3>A3 工资扣款凭证示例</h3>
-            <p>劳务费逐行取工资表，工资与个税则分别去匹配代发工资组合和较小金额国库流水。</p>
+            <p>劳务费逐行取工资表，工资与个税则分别去匹配代发工资组合和国库流水组合。</p>
           </div>
           <div class="example-body">
             <div class="example-images">
@@ -751,12 +771,12 @@
               </figure>
               <figure class="example-figure">
                 <img src="doc_assets/a3-bank-salary-tax.png" alt="A3银行流水示例">
-                <figcaption>银行流水：两条 <code>代发工资</code> 组成工资付款组合，较小金额国库流水用于个税。</figcaption>
+                <figcaption>银行流水：多条 <code>代发工资</code> 可组成工资付款组合，个税也按国库流水组合智能匹配。</figcaption>
               </figure>
             </div>
             <ul class="example-list">
-              <li>对应关系 1：劳务费借方逐行取 <code>D=劳务费</code> 的 <code>E列</code>，并带出该行的 <code>S/T</code>。</li>
-              <li>对应关系 2：非劳务薪资的 <code>Q列汇总</code> 形成 <code>2211010001</code>，非劳务的 <code>O列汇总</code> 形成 <code>2221070000</code>。</li>
+              <li>对应关系 1：劳务费借方逐行取 <code>D=劳务费</code> 的 <code>E列税前金额</code>，并带出该行的 <code>S/T</code>。</li>
+              <li>对应关系 2：非劳务薪资的 <code>Q列汇总</code> 形成 <code>2211010001</code>，匹配到的个税银行流水组合扣除劳务费个税后形成 <code>2221070000</code> 借方。</li>
               <li>校验关系：银行侧使用“代发工资组合 + 个税国库行”，不把社保国库行混入 A3。</li>
             </ul>
           </div>
@@ -1002,7 +1022,7 @@
           <h3>4. CO工单分摊文件</h3>
           <ul>
             <li>仅 `2050` 输出，包含 A9。</li>
-            <li>例如 `CO工单分摊/2050总账凭证导入-CO工单分摊202603.XLS`。</li>
+            <li>例如 `2050_耐数电子/06_CO工单分摊/2050总账凭证导入-CO工单分摊202603.XLS`。</li>
             <li>用于工资与奖金完成后，再做 CO 工单专项分摊。</li>
           </ul>
         </div>

@@ -62,6 +62,7 @@ HEADERS = [
     '到手工资合计',
     '薪酬到手工资',
     '劳务费到手工资',
+    '离职补偿金',
     '年终奖实发',
     '个税合计',
     '薪酬个税',
@@ -152,6 +153,14 @@ def _extract_payroll_period(path):
     return year, month
 
 
+def _looks_like_payroll_file(path):
+    if path.suffix.lower() != '.xlsx' or path.name.startswith('~$'):
+        return False
+
+    normalized_name = re.sub(r'\s+', '', path.name)
+    return '人力成本' in normalized_name and 'to财务' in normalized_name
+
+
 def _find_col(headers, keyword):
     keywords = keyword if isinstance(keyword, tuple) else (keyword,)
     for item in keywords:
@@ -181,13 +190,15 @@ def _find_company_col(headers):
 def _collect_payroll_files(monthly_input_root):
     files = []
     files.extend(sorted((monthly_input_root / '2025年数据' / '工资单').glob('*.xlsx')))
-    files.extend(sorted((monthly_input_root / '2026年1-2月数据').glob('人力成本研发项目分摊*.xlsx')))
+    files.extend(sorted((monthly_input_root / '2026年1-2月数据').glob('*.xlsx')))
     for batch in sorted(monthly_input_root.glob('2026-*处理批次*')):
-        files.extend(sorted((batch / '01_工资单').glob('人力成本研发项目分摊*.xlsx')))
+        files.extend(sorted((batch / '01_工资单').glob('*.xlsx')))
 
     seen = set()
     result = []
     for path in files:
+        if not _looks_like_payroll_file(path):
+            continue
         key = path.resolve()
         if key in seen:
             continue
@@ -206,6 +217,7 @@ def _new_payroll_bucket():
     bucket['labor_gross'] = Decimal('0')
     bucket['salary_net'] = Decimal('0')
     bucket['labor_net'] = Decimal('0')
+    bucket['severance_net'] = Decimal('0')
     bucket['salary_income_tax'] = Decimal('0')
     bucket['labor_income_tax'] = Decimal('0')
     return bucket
@@ -243,6 +255,8 @@ def _load_payroll_summary(monthly_input_root):
                 bucket['labor_gross'] += _to_decimal(ws.cell(row_idx, cols['gross']).value)
                 bucket['labor_net'] += _to_decimal(ws.cell(row_idx, cols['net_salary']).value)
                 bucket['labor_income_tax'] += _to_decimal(ws.cell(row_idx, cols['salary_tax']).value)
+            elif row_type == '离职补偿金':
+                bucket['severance_net'] += _to_decimal(ws.cell(row_idx, cols['net_salary']).value)
             else:
                 bucket['salary_gross'] += _to_decimal(ws.cell(row_idx, cols['gross']).value)
                 bucket['salary_net'] += _to_decimal(ws.cell(row_idx, cols['net_salary']).value)
@@ -507,8 +521,8 @@ def _build_output_rows(payroll_rows, bank_records):
             item['employee_fund'] = (fund_source_amount / Decimal('2')).quantize(CENT, rounding=ROUND_HALF_UP)
             item['company_fund'] = fund_source_amount - item['employee_fund']
 
-        gross_total = item['salary_gross'] + item['labor_gross']
-        ordinary_net = item['salary_net'] + item['labor_net']
+        gross_total = item['salary_gross'] + item['labor_gross'] + item['severance_net']
+        ordinary_net = item['salary_net'] + item['labor_net'] + item['severance_net']
         take_home_total = ordinary_net + bonus_net
         employee_insurance = (
             item['employee_pension'] + item['employee_unemployment'] + item['employee_medical'] + item['employee_fund']
@@ -593,6 +607,7 @@ def _build_output_rows(payroll_rows, bank_records):
             '到手工资合计': take_home_total,
             '薪酬到手工资': item['salary_net'],
             '劳务费到手工资': item['labor_net'],
+            '离职补偿金': item['severance_net'],
             '年终奖实发': bonus_net,
             '个税合计': tax_total,
             '薪酬个税': salary_tax,

@@ -16,10 +16,8 @@ from .core import (
     COLOR_TEXT_MAIN,
     COLOR_TEXT_SUB,
     COLOR_WARNING,
-    RAW_FILE_PATTERN,
     _apply_style,
     _btn,
-    _circle_label,
     _find_raw_files,
     _get_bank_dir,
     _get_bonus_path,
@@ -40,7 +38,6 @@ from .options import (
     get_default_processing_period,
     requires_bank_data,
     requires_bonus_data,
-    requires_co_data,
     requires_shared_expense_data,
 )
 from .pipeline import execute_payroll_run
@@ -51,10 +48,11 @@ class MainWindow:
     def __init__(self):
         self.root = tk.Tk()
         self.root.withdraw()
-        self.root.title('工资奖金凭证处理工具')
+        self.root.title('工资奖金自动化处理平台')
         self.root.configure(bg=COLOR_BG)
         self.root.resizable(True, True)
-        self.root.minsize(700, 520)
+        self.root.geometry('1180x780')
+        self.root.minsize(1040, 680)
         self.root.protocol('WM_DELETE_WINDOW', self._on_close)
         _apply_style(self.root)
 
@@ -76,7 +74,14 @@ class MainWindow:
         self._precheck_result = None
         self._precheck_signature = None
         self._precheck_running = False
+        self._guide_refresh_after_id = None
+        self._guide_refresh_poll_after_id = None
+        self._guide_refresh_queue = queue.Queue()
+        self._guide_refresh_pending_token = None
+        self._guide_refresh_token = 0
+        self._precheck_render_key = None
         self._guide_content = None
+        self._batch_summary_frame = None
         self._checklist_section = None
         self._paths_section = None
         self._requirements_section = None
@@ -119,47 +124,56 @@ class MainWindow:
     def _build_header(self):
         self._header_frame = tk.Frame(self.root, bg=COLOR_HEADER_BG, pady=0)
         self._header_frame.pack(fill='x')
-        tk.Frame(self._header_frame, bg=COLOR_PRIMARY, height=3).pack(fill='x')
-        inner = tk.Frame(self._header_frame, bg=COLOR_HEADER_BG, pady=10)
+        tk.Frame(self._header_frame, bg=COLOR_BORDER, height=1).pack(fill='x')
+        inner = tk.Frame(self._header_frame, bg=COLOR_HEADER_BG, pady=14)
         inner.pack(fill='x')
         self._header_inner = inner
 
         if self._logo_img:
-            tk.Label(inner, image=self._logo_img, bg=COLOR_HEADER_BG).pack(side='left', padx=(14, 12))
+            tk.Label(inner, image=self._logo_img, bg=COLOR_HEADER_BG).pack(side='left', padx=(22, 14))
 
         title_frame = tk.Frame(inner, bg=COLOR_HEADER_BG)
         title_frame.pack(side='left', fill='both', expand=True)
         self._header_title = tk.Label(
             title_frame,
-            text='工资奖金凭证处理工具',
-            font=('微软雅黑', 15, 'bold'),
-            fg=COLOR_PRIMARY,
+            text='工资奖金自动化处理平台',
+            font=('微软雅黑', 16, 'bold'),
+            fg=COLOR_TEXT_MAIN,
             bg=COLOR_HEADER_BG,
         )
         self._header_title.pack(anchor='w')
         self._header_sub = tk.Label(
             title_frame,
-            text='先选择处理月份，再执行预检并生成 A1-A10 凭证',
+            text='批次预检 · 凭证生成 · 输出留痕',
             font=('微软雅黑', 9),
             fg=COLOR_TEXT_SUB,
             bg=COLOR_HEADER_BG,
         )
         self._header_sub.pack(anchor='w', pady=(2, 0))
 
+        meta = tk.Frame(inner, bg=COLOR_HEADER_BG)
+        meta.pack(side='right', padx=(0, 22), anchor='e')
         tk.Label(
-            inner,
+            meta,
             text='Developed by Earnest Yin',
-            font=('Consolas', 10, 'bold'),
+            font=('Consolas', 11, 'bold'),
+            fg=COLOR_PRIMARY,
+            bg=COLOR_HEADER_BG,
+        ).pack(anchor='e')
+        tk.Label(
+            meta,
+            text='内部财务自动化工具',
+            font=('微软雅黑', 9),
             fg='#888888',
             bg=COLOR_HEADER_BG,
-        ).pack(side='right', padx=(0, 16), anchor='s')
+        ).pack(anchor='e', pady=(2, 0))
 
     def _set_header(self, title, sub='', bg=COLOR_HEADER_BG):
         for widget in self._header_frame.winfo_children():
             if isinstance(widget, tk.Frame) and widget is not self._header_inner:
                 widget.configure(bg=bg if bg != COLOR_HEADER_BG else COLOR_PRIMARY)
                 break
-        self._header_title.configure(text=title, fg=COLOR_PRIMARY if bg == COLOR_HEADER_BG else bg)
+        self._header_title.configure(text=title, fg=COLOR_TEXT_MAIN if bg == COLOR_HEADER_BG else bg)
         self._header_sub.configure(text=sub)
 
     def _clear_body(self):
@@ -201,15 +215,97 @@ class MainWindow:
     def _mark_precheck_stale(self):
         self._precheck_result = None
         self._precheck_signature = None
-        if self._precheck_text is not None:
-            self._render_precheck_result()
+        if not self._precheck_running:
+            self._precheck_status_var.set('选择已更新，请重新检查当前选择')
 
     def _on_selection_change(self):
         if self._suspend_option_refresh:
             return
         self._mark_precheck_stale()
-        if self._guide_content is not None and self._phase == 'GUIDE':
-            self._refresh_guide_sections()
+        self._schedule_guide_refresh()
+
+    def _schedule_guide_refresh(self, delay_ms=70):
+        if self._phase != 'GUIDE' or self._guide_content is None or self._checklist_section is None:
+            return
+        if self._guide_refresh_after_id is not None:
+            try:
+                self.root.after_cancel(self._guide_refresh_after_id)
+            except tk.TclError:
+                pass
+        self._guide_refresh_after_id = self.root.after(delay_ms, self._run_scheduled_guide_refresh)
+
+    def _run_scheduled_guide_refresh(self):
+        self._guide_refresh_after_id = None
+        if self._phase == 'GUIDE' and self._guide_content is not None and self._checklist_section is not None:
+            self._start_async_guide_refresh(render_precheck=True)
+
+    def _cancel_guide_refresh(self):
+        if self._guide_refresh_after_id is None:
+            pass
+        else:
+            try:
+                self.root.after_cancel(self._guide_refresh_after_id)
+            except tk.TclError:
+                pass
+            self._guide_refresh_after_id = None
+        if self._guide_refresh_poll_after_id is not None:
+            try:
+                self.root.after_cancel(self._guide_refresh_poll_after_id)
+            except tk.TclError:
+                pass
+            self._guide_refresh_poll_after_id = None
+        self._guide_refresh_pending_token = None
+
+    def _start_async_guide_refresh(self, render_precheck=False):
+        if self._phase != 'GUIDE' or self._guide_content is None:
+            return
+        self._guide_refresh_token += 1
+        token = self._guide_refresh_token
+        self._guide_refresh_pending_token = token
+        run_options = self._get_run_options()
+
+        def worker():
+            try:
+                raw_files = self._get_raw_files_for_selection(run_options)
+                file_state = self._build_file_state(run_options, raw_files)
+            except Exception as exc:
+                raw_files = []
+                file_state = {'error': str(exc)}
+            self._guide_refresh_queue.put((token, run_options, raw_files, file_state, render_precheck))
+
+        threading.Thread(target=worker, daemon=True).start()
+        self._schedule_guide_refresh_poll()
+
+    def _schedule_guide_refresh_poll(self):
+        if self._phase != 'GUIDE' or self._guide_refresh_poll_after_id is not None:
+            return
+        try:
+            self._guide_refresh_poll_after_id = self.root.after(16, self._poll_async_guide_refresh)
+        except tk.TclError:
+            self._guide_refresh_poll_after_id = None
+
+    def _poll_async_guide_refresh(self):
+        self._guide_refresh_poll_after_id = None
+        latest = None
+        while True:
+            try:
+                latest = self._guide_refresh_queue.get_nowait()
+            except queue.Empty:
+                break
+        if latest is not None:
+            token, run_options, raw_files, file_state, render_precheck = latest
+            if token == self._guide_refresh_token:
+                self._guide_refresh_pending_token = None
+                self._apply_async_guide_refresh(token, run_options, raw_files, file_state, render_precheck)
+        if self._phase == 'GUIDE' and self._guide_refresh_pending_token is not None:
+            self._schedule_guide_refresh_poll()
+
+    def _apply_async_guide_refresh(self, token, run_options, raw_files, file_state, render_precheck):
+        if token != self._guide_refresh_token:
+            return
+        if self._phase != 'GUIDE' or self._guide_content is None:
+            return
+        self._refresh_guide_sections(run_options, raw_files, file_state, render_precheck=render_precheck)
 
     def _set_voucher_selection(self, voucher_ids):
         selected = set(voucher_ids)
@@ -234,13 +330,66 @@ class MainWindow:
         }
         return mapping.get(voucher, '工资单、Mapping、工时')
 
-    def _build_section_title(self, parent, text):
+    def _panel(self, parent, padx=14, pady=12):
+        panel = tk.Frame(parent, bg=COLOR_CARD, highlightbackground=COLOR_BORDER, highlightthickness=1, padx=padx, pady=pady)
+        panel.pack(fill='x', pady=(0, 14))
+        return panel
+
+    def _build_scrollable_column(self, parent, width):
+        shell = tk.Frame(parent, bg=COLOR_BG, width=width)
+        shell.pack(side='left', fill='y', padx=(0, 16))
+        shell.pack_propagate(False)
+
+        canvas = tk.Canvas(shell, bg=COLOR_BG, highlightthickness=0, width=width)
+        scrollbar = tk.Scrollbar(shell, orient='vertical', command=canvas.yview)
+        content = tk.Frame(canvas, bg=COLOR_BG)
+        window_id = canvas.create_window((0, 0), window=content, anchor='nw')
+
+        def update_scrollregion(_event=None):
+            canvas.configure(scrollregion=canvas.bbox('all'))
+
+        def update_width(event):
+            canvas.itemconfigure(window_id, width=event.width)
+
+        content.bind('<Configure>', update_scrollregion)
+        canvas.bind('<Configure>', update_width)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side='left', fill='both', expand=True)
+        scrollbar.pack(side='right', fill='y')
+        return content
+
+    def _open_path(self, path):
+        if not path:
+            return
+        try:
+            os.startfile(path)
+        except Exception as exc:
+            messagebox.showerror('无法打开路径', f'{path}\n\n{exc}')
+
+    def _build_info_row(self, parent, label, value, bg=None, wraplength=300):
+        bg = bg or parent.cget('bg')
+        row = tk.Frame(parent, bg=bg)
+        row.pack(fill='x', pady=2)
+        tk.Label(row, text=label, font=('微软雅黑', 9, 'bold'), fg=COLOR_TEXT_SUB, bg=bg, width=10, anchor='w').pack(side='left')
+        tk.Label(
+            row,
+            text=value,
+            font=('微软雅黑', 9),
+            fg=COLOR_TEXT_MAIN,
+            bg=bg,
+            anchor='w',
+            justify='left',
+            wraplength=wraplength,
+        ).pack(side='left', fill='x', expand=True)
+
+    def _build_section_title(self, parent, text, bg=None):
+        bg = bg or parent.cget('bg')
         tk.Label(
             parent,
             text=text,
             font=('微软雅黑', 11, 'bold'),
             fg=COLOR_PRIMARY,
-            bg=COLOR_BG,
+            bg=bg,
             anchor='w',
         ).pack(fill='x')
         tk.Frame(parent, bg=COLOR_PRIMARY, height=2).pack(fill='x', pady=(2, 10))
@@ -291,8 +440,11 @@ class MainWindow:
             self._precheck_toggle_btn.configure(text='收起详细明细' if self._precheck_detail_expanded else '展开详细明细')
 
     def _build_file_status_row(self, parent, level_text, level_fg, level_bg, file_text, status_text, status_fg, status_bg, note):
-        row = tk.Frame(parent, bg=COLOR_BG, pady=4)
+        parent_bg = parent.cget('bg')
+        row = tk.Frame(parent, bg=parent_bg, pady=4)
         row.pack(fill='x')
+        row.grid_columnconfigure(2, weight=3, minsize=320)
+        row.grid_columnconfigure(3, weight=2, minsize=240)
         tk.Label(
             row,
             text=f' {level_text} ',
@@ -300,16 +452,7 @@ class MainWindow:
             fg=level_fg,
             bg=level_bg,
             padx=4,
-        ).pack(side='left', padx=(0, 8))
-        tk.Label(
-            row,
-            text=file_text,
-            font=('微软雅黑', 10, 'bold'),
-            fg=COLOR_TEXT_MAIN,
-            bg=COLOR_BG,
-            width=40,
-            anchor='w',
-        ).pack(side='left')
+        ).grid(row=0, column=0, sticky='nw', padx=(0, 8))
         tk.Label(
             row,
             text=f' {status_text} ',
@@ -317,23 +460,34 @@ class MainWindow:
             fg=status_fg,
             bg=status_bg,
             padx=4,
-        ).pack(side='left', padx=(0, 10))
+        ).grid(row=0, column=1, sticky='nw', padx=(0, 12))
+        tk.Label(
+            row,
+            text=file_text,
+            font=('微软雅黑', 10, 'bold'),
+            fg=COLOR_TEXT_MAIN,
+            bg=parent_bg,
+            anchor='w',
+            justify='left',
+            wraplength=360,
+        ).grid(row=0, column=2, sticky='new', padx=(0, 14))
         tk.Label(
             row,
             text=note,
             font=('微软雅黑', 9),
             fg=COLOR_TEXT_SUB,
-            bg=COLOR_BG,
+            bg=parent_bg,
             anchor='w',
-        ).pack(side='left')
+            justify='left',
+            wraplength=420,
+        ).grid(row=0, column=3, sticky='new')
 
     def _build_selection_section(self, parent):
-        card = tk.Frame(parent, bg=COLOR_CARD, highlightbackground='#3D3D3D', highlightthickness=1, padx=14, pady=12)
-        card.pack(fill='x', pady=(0, 14))
+        card = self._panel(parent)
 
         tk.Label(
             card,
-            text='本次生成范围',
+            text='生成范围',
             font=('微软雅黑', 11, 'bold'),
             fg=COLOR_PRIMARY,
             bg=COLOR_CARD,
@@ -378,12 +532,13 @@ class MainWindow:
         ).pack(side='left', padx=(8, 6))
         tk.Label(period_row, text='月', font=('微软雅黑', 10), fg=COLOR_TEXT_MAIN, bg=COLOR_CARD).pack(side='left')
         tk.Label(
-            period_row,
-            text='每月 1-5 日默认回到上个月；工资单会自动匹配上一月文件',
+            card,
+            text='工资单自动匹配上一月文件',
             font=('微软雅黑', 9),
             fg=COLOR_TEXT_SUB,
             bg=COLOR_CARD,
-        ).pack(side='left', padx=(14, 0))
+            anchor='w',
+        ).pack(fill='x', pady=(0, 10))
 
         company_row = tk.Frame(card, bg=COLOR_CARD)
         company_row.pack(fill='x', pady=(0, 8))
@@ -415,10 +570,18 @@ class MainWindow:
             ('A9', VOUCHER_PRESETS['co']),
             ('A10', VOUCHER_PRESETS['rd']),
         ]
-        for label, voucher_ids in preset_buttons:
-            _btn(voucher_head, label, '#444444', lambda ids=voucher_ids: self._set_voucher_selection(ids), padx=10, pady=3).pack(
-                side='left', padx=(0, 8)
+        preset_grid = tk.Frame(card, bg=COLOR_CARD)
+        preset_grid.pack(fill='x', pady=(0, 8))
+        for idx, (label, voucher_ids) in enumerate(preset_buttons):
+            _btn(preset_grid, label, '#444444', lambda ids=voucher_ids: self._set_voucher_selection(ids), padx=9, pady=3).grid(
+                row=idx // 3,
+                column=idx % 3,
+                sticky='ew',
+                padx=(0, 6),
+                pady=(0, 6),
             )
+        for col_idx in range(3):
+            preset_grid.columnconfigure(col_idx, weight=1)
 
         voucher_grid = tk.Frame(card, bg=COLOR_CARD)
         voucher_grid.pack(fill='x')
@@ -435,55 +598,105 @@ class MainWindow:
                 activeforeground=COLOR_TEXT_MAIN,
                 font=('微软雅黑', 9),
                 anchor='w',
-                width=24,
-            ).grid(row=idx // 2, column=idx % 2, sticky='w', padx=(0, 18), pady=3)
+                width=30,
+            ).grid(row=idx, column=0, sticky='w', padx=(0, 6), pady=2)
 
-    def _collect_missing_inputs(self, run_options, raw_files):
-        missing = []
+    def _refresh_batch_summary_section(self, run_options, raw_files):
+        if self._batch_summary_frame is None:
+            return
+        for widget in self._batch_summary_frame.winfo_children():
+            widget.destroy()
+
+        layout = self._get_batch_layout(run_options)
+        self._build_section_title(self._batch_summary_frame, '批次摘要', bg=COLOR_CARD)
+        self._build_info_row(self._batch_summary_frame, '处理月份', run_options.processing_label, bg=COLOR_CARD)
+        self._build_info_row(self._batch_summary_frame, '工资月份', run_options.payroll_label, bg=COLOR_CARD)
+        self._build_info_row(self._batch_summary_frame, '公司', '、'.join(run_options.companies) or '未选择', bg=COLOR_CARD)
+        self._build_info_row(self._batch_summary_frame, '凭证', '、'.join(run_options.vouchers) or '未选择', bg=COLOR_CARD)
+        self._build_info_row(self._batch_summary_frame, '工资单', str(len(raw_files)), bg=COLOR_CARD)
+
+        action_row = tk.Frame(self._batch_summary_frame, bg=COLOR_CARD)
+        action_row.pack(fill='x', pady=(10, 0))
+        _btn(action_row, '月度输入', '#444444', lambda: self._open_path(layout.monthly_input_root), padx=10, pady=4).pack(side='left', padx=(0, 8))
+        _btn(action_row, '运行输出', '#444444', lambda: self._open_path(layout.run_output_root), padx=10, pady=4).pack(side='left')
+
+    def _build_run_steps_section(self, parent):
+        card = self._panel(parent)
+        self._build_section_title(card, '运行步骤', bg=COLOR_CARD)
+        steps = [
+            ('01', '选择处理月份和凭证范围'),
+            ('02', '检查工资单、Mapping、工时和按需资料'),
+            ('03', '生成整理工资单和 SAP 凭证文件'),
+            ('04', '输出清单、日志和基础资料快照'),
+        ]
+        for num, text in steps:
+            row = tk.Frame(card, bg=COLOR_CARD)
+            row.pack(fill='x', pady=4)
+            tk.Label(row, text=num, font=('Consolas', 9, 'bold'), fg='#000000', bg=COLOR_PRIMARY, width=4).pack(side='left', padx=(0, 8))
+            tk.Label(row, text=text, font=('微软雅黑', 9), fg=COLOR_TEXT_MAIN, bg=COLOR_CARD, anchor='w', wraplength=260).pack(side='left', fill='x', expand=True)
+
+    def _build_file_state(self, run_options, raw_files):
         layout = self._get_batch_layout(run_options)
         payroll_period = run_options.payroll_period
+        co_path = _get_co_workorder_path(self._base_dir, payroll_period[0], payroll_period[1])
+        shared_path = _get_shared_expense_path(self._base_dir, payroll_period[0], payroll_period[1])
+        bank_files = _find_bank_files(layout.bank_dir)
+        return {
+            'layout': layout,
+            'payroll_period': payroll_period,
+            'co_path': co_path,
+            'shared_path': shared_path,
+            'mapping_exists': os.path.exists(layout.mapping_path),
+            'timesheet_exists': os.path.exists(layout.timesheet_path),
+            'bonus_exists': os.path.exists(layout.bonus_path),
+            'bank_exists': len(bank_files) > 0,
+            'co_exists': bool(co_path) and os.path.exists(co_path),
+            'shared_exists': bool(shared_path) and os.path.exists(shared_path),
+        }
+
+    def _collect_missing_inputs(self, run_options, raw_files, file_state=None):
+        missing = []
+        file_state = file_state or self._build_file_state(run_options, raw_files)
+        layout = file_state['layout']
         if not run_options.companies:
             missing.append('至少选择 1 家公司')
         if not run_options.vouchers:
             missing.append('至少选择 1 张凭证')
         if len(raw_files) != 1:
             missing.append(f'工资单目录下必须且只能有 1 份 {run_options.payroll_label} 的原始工资单')
-        if not os.path.exists(layout.mapping_path):
+        if not file_state['mapping_exists']:
             missing.append('缺少 Mapping表.xlsx')
-        if not os.path.exists(layout.timesheet_path):
+        if not file_state['timesheet_exists']:
             missing.append('缺少 工时数据.xlsx')
-        if requires_bonus_data(run_options) and not os.path.exists(layout.bonus_path):
+        if requires_bonus_data(run_options) and not file_state['bonus_exists']:
             missing.append('A7/A8 需要 年终奖计提文件')
-        if requires_bank_data(run_options) and not _find_bank_files(layout.bank_dir):
+        if requires_bank_data(run_options) and not file_state['bank_exists']:
             missing.append('A1-A3 需要 银行流水 文件')
         if run_options.wants_voucher('A9') and '耐数电子' not in run_options.companies:
             missing.append('A9 仅适用于耐数电子，请勾选 2050')
-        if run_options.wants_voucher('A9'):
-            co_path = _get_co_workorder_path(self._base_dir, payroll_period[0], payroll_period[1])
-            if not os.path.exists(co_path):
-                missing.append('A9 需要 CO工单分摊.xlsx')
-        if requires_shared_expense_data(run_options):
-            shared_path = _get_shared_expense_path(self._base_dir, payroll_period[0], payroll_period[1])
-            if not os.path.exists(shared_path):
-                missing.append('A10 需要 待分摊费用YYMM.xlsx')
+        if run_options.wants_voucher('A9') and not file_state['co_exists']:
+            missing.append('A9 需要 CO工单分摊.xlsx')
+        if requires_shared_expense_data(run_options) and not file_state['shared_exists']:
+            missing.append('A10 需要 待分摊费用YYMM.xlsx')
         return missing
 
-    def _refresh_checklist_section(self, run_options, raw_files):
+    def _refresh_checklist_section(self, run_options, raw_files, file_state=None):
         for widget in self._checklist_section.winfo_children():
             widget.destroy()
 
-        layout = self._get_batch_layout(run_options)
-        payroll_period = run_options.payroll_period
-        co_path = _get_co_workorder_path(self._base_dir, payroll_period[0], payroll_period[1])
-        shared_path = _get_shared_expense_path(self._base_dir, payroll_period[0], payroll_period[1])
-        mapping_exists = os.path.exists(layout.mapping_path)
-        timesheet_exists = os.path.exists(layout.timesheet_path)
-        bonus_exists = os.path.exists(layout.bonus_path)
-        bank_exists = len(_find_bank_files(layout.bank_dir)) > 0
-        co_exists = bool(co_path) and os.path.exists(co_path)
-        shared_exists = bool(shared_path) and os.path.exists(shared_path)
+        file_state = file_state or self._build_file_state(run_options, raw_files)
+        layout = file_state['layout']
+        payroll_period = file_state['payroll_period']
+        co_path = file_state['co_path']
+        shared_path = file_state['shared_path']
+        mapping_exists = file_state['mapping_exists']
+        timesheet_exists = file_state['timesheet_exists']
+        bonus_exists = file_state['bonus_exists']
+        bank_exists = file_state['bank_exists']
+        co_exists = file_state['co_exists']
+        shared_exists = file_state['shared_exists']
 
-        self._build_section_title(self._checklist_section, '所需资料清单')
+        self._build_section_title(self._checklist_section, '所需资料清单', bg=self._checklist_section.cget('bg'))
         file_rows = [
             (
                 '必须',
@@ -566,24 +779,25 @@ class MainWindow:
         for widget in self._requirements_section.winfo_children():
             widget.destroy()
 
-        self._build_section_title(self._requirements_section, '按凭证资料需求')
+        section_bg = self._requirements_section.cget('bg')
+        self._build_section_title(self._requirements_section, '按凭证资料需求', bg=section_bg)
         tk.Label(
             self._requirements_section,
             text=f'当前处理月份：{run_options.processing_label}；对应工资所属月份：{run_options.payroll_label}',
             font=('微软雅黑', 9),
             fg=COLOR_TEXT_SUB,
-            bg=COLOR_BG,
+            bg=section_bg,
             anchor='w',
         ).pack(fill='x', pady=(0, 6))
         for voucher in run_options.vouchers:
-            row = tk.Frame(self._requirements_section, bg=COLOR_BG, pady=2)
+            row = tk.Frame(self._requirements_section, bg=section_bg, pady=2)
             row.pack(fill='x')
             tk.Label(
                 row,
                 text=VOUCHER_LABELS[voucher],
                 font=('微软雅黑', 9, 'bold'),
                 fg=COLOR_TEXT_MAIN,
-                bg=COLOR_BG,
+                bg=section_bg,
                 width=24,
                 anchor='w',
             ).pack(side='left')
@@ -592,15 +806,16 @@ class MainWindow:
                 text=self._voucher_requirement_text(voucher),
                 font=('微软雅黑', 9),
                 fg=COLOR_TEXT_SUB,
-                bg=COLOR_BG,
+                bg=section_bg,
                 anchor='w',
             ).pack(side='left')
 
-    def _refresh_paths_section(self, run_options, raw_files):
+    def _refresh_paths_section(self, run_options, raw_files, file_state=None):
         for widget in self._paths_section.winfo_children():
             widget.destroy()
 
-        layout = self._get_batch_layout(run_options)
+        file_state = file_state or self._build_file_state(run_options, raw_files)
+        layout = file_state['layout']
         path_lines = [
             f'当前处理月份：{run_options.processing_label}',
             f'对应工资所属月份：{run_options.payroll_label}',
@@ -616,25 +831,40 @@ class MainWindow:
         if raw_files:
             show_name = os.path.basename(raw_files[0]) if len(raw_files) == 1 else '；'.join(os.path.basename(p) for p in raw_files[:2])
             path_lines.insert(4, f'当前识别工资单：{show_name}')
-        payroll_period = run_options.payroll_period
-        co_path = _get_co_workorder_path(self._base_dir, payroll_period[0], payroll_period[1])
-        shared_path = _get_shared_expense_path(self._base_dir, payroll_period[0], payroll_period[1])
+        co_path = file_state['co_path']
+        shared_path = file_state['shared_path']
         path_lines.append(f'CO工单分摊：{co_path}')
         path_lines.append(f'待分摊费用：{shared_path}')
 
+        section_bg = self._paths_section.cget('bg')
+        self._build_section_title(self._paths_section, '路径与输出位置', bg=section_bg)
         for line in path_lines:
             tk.Label(
                 self._paths_section,
                 text=line,
                 font=('微软雅黑', 9),
                 fg=COLOR_TEXT_SUB,
-                bg=COLOR_BG,
+                bg=section_bg,
                 anchor='w',
+                justify='left',
+                wraplength=700,
             ).pack(fill='x', pady=(2, 0))
 
     def _render_precheck_result(self):
         if self._precheck_text is None or self._precheck_summary_frame is None or self._precheck_company_frame is None:
             return
+
+        run_options = self._get_run_options()
+        signature = self._current_selection_signature()
+        if self._precheck_running:
+            render_key = ('running', signature)
+        elif self._precheck_result is None or self._precheck_signature != signature:
+            render_key = ('stale', signature)
+        else:
+            render_key = ('result', id(self._precheck_result), signature)
+        if render_key == self._precheck_render_key:
+            return
+        self._precheck_render_key = render_key
 
         for widget in self._precheck_summary_frame.winfo_children():
             widget.destroy()
@@ -648,8 +878,6 @@ class MainWindow:
         self._precheck_text.tag_configure('err', foreground=COLOR_DANGER)
         self._precheck_text.tag_configure('info', foreground=COLOR_TEXT_SUB)
 
-        run_options = self._get_run_options()
-        signature = self._current_selection_signature()
         if self._precheck_running:
             self._precheck_status_var.set('正在检查当前选择，请稍候…')
             summary_row = tk.Frame(self._precheck_summary_frame, bg=COLOR_CARD)
@@ -782,13 +1010,22 @@ class MainWindow:
         self._precheck_signature = signature
         self._precheck_result = result
         self._render_precheck_result()
-        self._refresh_footer()
+        if self._phase == 'GUIDE':
+            self._start_async_guide_refresh(render_precheck=False)
+        else:
+            self._refresh_footer()
 
-    def _refresh_footer(self):
+    def _refresh_footer(self, run_options=None, raw_files=None, file_state=None):
         self._clear_footer()
-        run_options = self._get_run_options()
-        raw_files = self._get_raw_files_for_selection(run_options)
-        missing_items = self._collect_missing_inputs(run_options, raw_files)
+        run_options = run_options or self._get_run_options()
+        if self._precheck_running:
+            missing_items = []
+        else:
+            if raw_files is None:
+                raw_files = self._get_raw_files_for_selection(run_options)
+            if file_state is None:
+                file_state = self._build_file_state(run_options, raw_files)
+            missing_items = self._collect_missing_inputs(run_options, raw_files, file_state)
         signature = self._current_selection_signature()
         precheck_ready = self._precheck_result is not None and self._precheck_signature == signature and not self._precheck_running
         precheck_can_run = precheck_ready and self._precheck_result.get('can_run', False)
@@ -829,69 +1066,43 @@ class MainWindow:
         ).pack(side='left', padx=(10, 0))
         _btn(self._footer, '取消', '#444444', self.root.destroy, padx=16, pady=6).pack(side='right', padx=(10, 30))
 
-    def _refresh_guide_sections(self):
-        run_options = self._get_run_options()
-        raw_files = self._get_raw_files_for_selection(run_options)
-        self._refresh_checklist_section(run_options, raw_files)
+    def _refresh_guide_sections(self, run_options=None, raw_files=None, file_state=None, render_precheck=True):
+        if self._phase != 'GUIDE' or self._guide_content is None:
+            return
+        run_options = run_options or self._get_run_options()
+        if raw_files is None:
+            raw_files = self._get_raw_files_for_selection(run_options)
+        if file_state is None:
+            file_state = self._build_file_state(run_options, raw_files)
+        self._refresh_batch_summary_section(run_options, raw_files)
+        self._refresh_checklist_section(run_options, raw_files, file_state)
         self._refresh_requirements_section(run_options)
-        self._refresh_paths_section(run_options, raw_files)
-        self._render_precheck_result()
-        self._refresh_footer()
+        self._refresh_paths_section(run_options, raw_files, file_state)
+        if render_precheck:
+            self._render_precheck_result()
+        self._refresh_footer(run_options, raw_files, file_state)
 
     def _show_guide(self):
         self._phase = 'GUIDE'
         self._clear_body()
-        self._set_header('工资奖金凭证处理工具', '先选择处理月份，再按所选公司和 A1-A10 凭证执行预检与生成')
+        self._set_header('工资奖金自动化处理平台', '先预检资料完整性，再生成所选公司和 A1-A10 凭证')
 
-        self._guide_content = tk.Frame(self._body, bg=COLOR_BG, padx=30, pady=14)
+        self._guide_content = tk.Frame(self._body, bg=COLOR_BG, padx=22, pady=16)
         self._guide_content.pack(fill='both', expand=True)
 
-        self._build_selection_section(self._guide_content)
+        workbench = tk.Frame(self._guide_content, bg=COLOR_BG)
+        workbench.pack(fill='both', expand=True)
 
-        self._checklist_section = tk.Frame(self._guide_content, bg=COLOR_BG)
-        self._checklist_section.pack(fill='x')
-        self._requirements_section = tk.Frame(self._guide_content, bg=COLOR_BG)
-        self._requirements_section.pack(fill='x', pady=(10, 0))
-        self._paths_section = tk.Frame(self._guide_content, bg=COLOR_BG)
-        self._paths_section.pack(fill='x', pady=(8, 0))
+        left = self._build_scrollable_column(workbench, width=365)
+        right = tk.Frame(workbench, bg=COLOR_BG)
+        right.pack(side='left', fill='both', expand=True)
 
-        tk.Label(self._guide_content, text='', bg=COLOR_BG, height=1).pack()
-        self._build_section_title(self._guide_content, '运行步骤')
+        self._build_selection_section(left)
+        self._batch_summary_frame = self._panel(left)
+        self._build_run_steps_section(left)
 
-        for num, text in [
-            ('①', '先确认处理月份，系统会自动定位对应批次目录并匹配上一月唯一工资单'),
-            ('②', '对首个工作表 A/B 列空白单元格按上一行非空值向下填充'),
-            ('③', '校验 Q 列实发金额是否等于 E 列减 K:P 列个人承担金额'),
-            ('④', '根据 Mapping 表生成 S 列成本中心，并根据工时数据生成 T 列内部订单'),
-            ('⑤', '银行流水会扫描整个目录，并按当前处理月份筛选后自动去重'),
-            ('⑥', '若工时项目未全部匹配到内部订单，则终止后续处理'),
-            ('⑦', '先检查当前选择的数据支撑情况，再生成所选公司与 A1-A10 凭证及留痕文件'),
-        ]:
-            row = tk.Frame(self._guide_content, bg=COLOR_BG, pady=3)
-            row.pack(fill='x')
-            _circle_label(row, num, size=26, parent_bg=COLOR_BG).pack(side='left', padx=(0, 10))
-            tk.Label(row, text=text, font=('微软雅黑', 10), fg=COLOR_TEXT_MAIN, bg=COLOR_BG, anchor='w').pack(side='left')
-
-        tip = tk.Frame(self._guide_content, bg='#252500', pady=8, padx=12)
-        tip.pack(fill='x', pady=(14, 0))
-        tk.Label(
-            tip,
-            text='输出结果会写入标准批次目录：月度输入、运行输出、归档留痕三层分开；工资单文件名仍沿用工资所属月份，凭证与留痕文件按处理月份和批次归档',
-            font=('微软雅黑', 9),
-            fg=COLOR_PRIMARY,
-            bg='#252500',
-            anchor='w',
-        ).pack(fill='x')
-
-        precheck_card = tk.Frame(
-            self._guide_content,
-            bg=COLOR_CARD,
-            highlightbackground='#3D3D3D',
-            highlightthickness=1,
-            padx=14,
-            pady=12,
-        )
-        precheck_card.pack(fill='both', expand=True, pady=(14, 0))
+        precheck_card = self._panel(right)
+        precheck_card.pack_configure(fill='x')
         tk.Label(
             precheck_card,
             text='预检结果',
@@ -936,30 +1147,53 @@ class MainWindow:
         )
         self._precheck_text.pack(fill='both', expand=True)
 
-        self._refresh_guide_sections()
+        grid = tk.Frame(right, bg=COLOR_BG)
+        grid.pack(fill='both', expand=True)
+        self._checklist_section = self._panel(grid)
+        self._requirements_section = self._panel(grid)
+        self._paths_section = self._panel(grid)
+
+        tip = tk.Frame(right, bg='#252500', pady=8, padx=12)
+        tip.pack(fill='x')
+        tk.Label(
+            tip,
+            text='输出结果写入标准批次目录：月度输入、运行输出、归档留痕分层管理；工资单按工资所属月份识别，凭证和留痕按处理月份归档。',
+            font=('微软雅黑', 9),
+            fg=COLOR_PRIMARY,
+            bg='#252500',
+            anchor='w',
+            justify='left',
+            wraplength=720,
+        ).pack(fill='x')
+
+        self._start_async_guide_refresh(render_precheck=True)
 
     def _show_progress(self):
+        self._cancel_guide_refresh()
         self._phase = 'RUN'
         self._clear_body()
         self._clear_footer()
-        self._set_header('正在运行，请稍候…', '')
+        self._set_header('任务执行中', '正在生成工资整理文件、凭证文件和批次留痕')
 
-        body = tk.Frame(self._body, bg=COLOR_BG, padx=24, pady=14)
+        body = tk.Frame(self._body, bg=COLOR_BG, padx=28, pady=18)
         body.pack(fill='both', expand=True)
 
         self._step_var = tk.StringVar(value='准备中…')
+        status_card = tk.Frame(body, bg=COLOR_CARD, highlightbackground=COLOR_BORDER, highlightthickness=1, padx=16, pady=14)
+        status_card.pack(fill='x', pady=(0, 14))
+        tk.Label(status_card, text='当前步骤', font=('微软雅黑', 9, 'bold'), fg=COLOR_TEXT_SUB, bg=COLOR_CARD, anchor='w').pack(fill='x')
         tk.Label(
-            body,
+            status_card,
             textvariable=self._step_var,
-            font=('微软雅黑', 10, 'bold'),
+            font=('微软雅黑', 15, 'bold'),
             fg=COLOR_PRIMARY,
-            bg=COLOR_BG,
+            bg=COLOR_CARD,
             anchor='w',
-        ).pack(fill='x')
+        ).pack(fill='x', pady=(6, 0))
 
         self._pb_var = tk.IntVar(value=0)
         self._pb = ttk.Progressbar(
-            body,
+            status_card,
             variable=self._pb_var,
             maximum=6,
             length=650,
@@ -968,7 +1202,7 @@ class MainWindow:
         )
         self._pb.pack(fill='x', pady=(6, 12))
 
-        tk.Label(body, text='运行日志', font=('微软雅黑', 9, 'bold'), fg=COLOR_TEXT_SUB, bg=COLOR_BG, anchor='w').pack(fill='x')
+        tk.Label(body, text='运行日志', font=('微软雅黑', 11, 'bold'), fg=COLOR_PRIMARY, bg=COLOR_BG, anchor='w').pack(fill='x')
         frame = tk.Frame(body, bg=COLOR_CARD, highlightbackground=COLOR_BORDER, highlightthickness=1)
         frame.pack(fill='both', expand=True, pady=(4, 0))
         self._log_text = tk.Text(
@@ -1065,6 +1299,16 @@ class MainWindow:
                 self._append_log('存在凭证科目对冲异常，请按上方明细复核。', 'warn')
 
         _btn(self._footer, '关闭', '#444444', self.root.destroy, padx=20, pady=6).pack(side='left', padx=(30, 10))
+        if success and self._result:
+            artifact_paths = self._result.get('artifact_paths', {})
+            output_manifest = artifact_paths.get('output_manifest')
+            run_log = artifact_paths.get('run_log')
+            output_dir = os.path.dirname(output_manifest) if output_manifest else ''
+            log_dir = os.path.dirname(run_log) if run_log else ''
+            if output_dir:
+                _btn(self._footer, '打开输出清单目录', COLOR_SUCCESS, lambda: self._open_path(output_dir), padx=16, pady=6).pack(side='left', padx=(0, 10))
+            if log_dir:
+                _btn(self._footer, '打开运行日志目录', '#444444', lambda: self._open_path(log_dir), padx=16, pady=6).pack(side='left')
 
     def _poll(self):
         try:

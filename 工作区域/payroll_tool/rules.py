@@ -5,6 +5,14 @@ MAX_BANK_MATCH_COMBO_SIZE = 6
 BANK_VOUCHER_TYPE = 'KZ'
 BANK_REASON_CODE = '202'
 
+DEPARTMENT_DAILY_ORDER_OVERRIDES = {
+    ('耐数信息', 'HLD硬件逻辑部'): '9202197',
+}
+
+BONUS_DEPARTMENT_ACCRUAL_OVERRIDES = {
+    ('耐数信息', 2026, 7, 'WLS无线解决方案'): Decimal('0.00'),
+}
+
 BONUS_TAX_BY_PAYMENT_PERIOD = {
     ('2050', 2026, 4): Decimal('75720.04'),
     ('2060', 2026, 4): Decimal('47375.96'),

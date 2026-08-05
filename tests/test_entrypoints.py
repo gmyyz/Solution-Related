@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT / '工作区域'))
 class EntrypointCompileTests(unittest.TestCase):
     def test_pyw_entrypoints_compile(self):
         entrypoints = [
-            ROOT / '工作区域' / '运行-1.工资单首步处理.pyw',
+            ROOT / '工作区域' / '运行-1.工资奖金自动化处理平台.pyw',
             ROOT / '工作区域' / '运行-2.工时周报生成.pyw',
             ROOT / '工作区域' / '原始数据' / '工时数据' / '运行-工时周报生成.pyw',
         ]

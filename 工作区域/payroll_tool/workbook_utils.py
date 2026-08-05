@@ -111,13 +111,25 @@ def _find_total_row(ws):
     return None
 
 
-def _recalculate_total_row(ws, total_row_idx):
+def _find_payroll_header_row(ws):
+    expected_headers = ('公司', '部门', '项目', '类别')
+    for row_idx in range(1, min(ws.max_row, 5) + 1):
+        actual_headers = tuple(_normalize_text(ws.cell(row=row_idx, column=col_idx).value) for col_idx in range(1, 5))
+        if actual_headers == expected_headers:
+            return row_idx
+    raise ValueError('未能识别工资单表头：前 5 行中未找到“公司、部门、项目、类别”')
+
+
+def _recalculate_total_row(ws, total_row_idx, data_start_row=3):
     ws.cell(row=total_row_idx, column=1).value = '总计'
     for col_idx in range(2, 21):
         ws.cell(row=total_row_idx, column=col_idx).value = None
 
     for col_idx in range(5, 19):
-        total_value = sum((_to_decimal(ws.cell(row=row_idx, column=col_idx).value) for row_idx in range(3, total_row_idx)), Decimal('0'))
+        total_value = sum(
+            (_to_decimal(ws.cell(row=row_idx, column=col_idx).value) for row_idx in range(data_start_row, total_row_idx)),
+            Decimal('0'),
+        )
         ws.cell(row=total_row_idx, column=col_idx).value = float(
             total_value.quantize(CENT, rounding=ROUND_HALF_UP)
         )

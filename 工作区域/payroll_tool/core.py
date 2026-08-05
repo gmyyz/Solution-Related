@@ -36,10 +36,13 @@ from .options import (
 from .rules import (
     BANK_REASON_CODE,
     BANK_VOUCHER_TYPE,
+    BONUS_DEPARTMENT_ACCRUAL_OVERRIDES,
     BONUS_TAX_BY_PAYMENT_PERIOD,
+    DEPARTMENT_DAILY_ORDER_OVERRIDES,
 )
 from .workbook_utils import (
     _copy_cell_style,
+    _find_payroll_header_row,
     _find_total_row,
     _format_code,
     _is_blank,
@@ -1324,8 +1327,10 @@ def _load_timesheet_match_context(timesheet_path):
 def _lookup_internal_order_from_timesheet(timesheet_context, company, dept, project):
     company_code_by_name = {'耐数电子': 2050, '耐数信息': 2060}
     cc = company_code_by_name.get(company)
+    dept_text = _normalize_department_for_order(dept)
+    candidates = _build_internal_order_candidates(dept, project)
 
-    for candidate in _build_internal_order_candidates(dept, project):
+    for candidate in candidates:
         entry = timesheet_context['project_index'].get((company, candidate))
         if entry and entry.get('order'):
             return entry['order'], candidate
@@ -1338,7 +1343,11 @@ def _lookup_internal_order_from_timesheet(timesheet_context, company, dept, proj
             )
             if order:
                 return order, used_key
-    return '', (_build_internal_order_candidates(dept, project)[0] if _build_internal_order_candidates(dept, project) else '')
+    daily_project = f'{dept_text}日常工作' if dept_text else ''
+    override_order = DEPARTMENT_DAILY_ORDER_OVERRIDES.get((company, dept_text), '')
+    if override_order and daily_project in candidates:
+        return override_order, daily_project
+    return '', (candidates[0] if candidates else '')
 
 
 def _resolve_a4_internal_order(timesheet_context, company, dept, project, default_order):
@@ -1544,6 +1553,10 @@ def _build_bonus_department_amounts(company, payroll_year, payroll_month, bonus_
             raise ValueError(f'{company} 奖金数据中部门 {item["dept"]} 未匹配到成本中心')
         base_amount = sum((item['monthly_amounts'].get(month, Decimal('0.00')) for month in source_months), Decimal('0.00'))
         amount = (base_amount * ratio).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        amount = BONUS_DEPARTMENT_ACCRUAL_OVERRIDES.get(
+            (company, posting_year, posting_month, item['dept']),
+            amount,
+        )
         if amount == Decimal('0.00'):
             continue
         rows.append(
@@ -1876,12 +1889,13 @@ def _build_a2_rows(company, company_code, bank_records, payroll_year, payroll_mo
     return rows
 
 
-def _build_a3_rows(company, company_code, ws, bank_records, payroll_year, payroll_month):
+def _build_a3_rows(company, company_code, ws, bank_records, payroll_year, payroll_month, timesheet_context):
     next_year, next_month = _shift_month(payroll_year, payroll_month, 1)
     month_records = bank_records.get((company_code, next_year, next_month), [])
     salary_records = [record for record in month_records if '代发工资' in record['usage']]
 
     labor_rows = []
+    severance_rows = []
     salary_total = Decimal('0')
     tax_total = Decimal('0')
     labor_tax_total = Decimal('0')
@@ -1890,7 +1904,8 @@ def _build_a3_rows(company, company_code, ws, bank_records, payroll_year, payrol
     if total_row_idx is None:
         raise ValueError(f'{company} 工资单中未找到总计行')
     salary_match_target = _to_money(ws.cell(total_row_idx, 17).value)
-    for row_idx in range(3, ws.max_row + 1):
+    data_start_row = _find_payroll_header_row(ws) + 1
+    for row_idx in range(data_start_row, ws.max_row + 1):
         if _is_total_row(ws.cell(row_idx, 1).value):
             break
         item_type = _normalize_text(ws.cell(row_idx, 4).value)
@@ -1902,6 +1917,26 @@ def _build_a3_rows(company, company_code, ws, bank_records, payroll_year, payrol
                     'amount': _to_money(ws.cell(row_idx, 5).value),
                     'cost_center': _format_code(ws.cell(row_idx, 19).value),
                     'order': _format_code(ws.cell(row_idx, 20).value),
+                }
+            )
+        elif item_type == '离职补偿金':
+            dept = _normalize_department_for_order(ws.cell(row_idx, 2).value)
+            order, daily_project = _lookup_internal_order_from_timesheet(
+                timesheet_context,
+                company,
+                dept,
+                '',
+            )
+            if not order:
+                raise ValueError(
+                    f'{company} 离职补偿金第 {row_idx} 行未找到部门日常内部订单：'
+                    f'部门“{dept}”，匹配项目“{daily_project}”'
+                )
+            severance_rows.append(
+                {
+                    'amount': _to_money(ws.cell(row_idx, 17).value),
+                    'cost_center': _format_code(ws.cell(row_idx, 19).value),
+                    'order': order,
                 }
             )
         elif item_type == '薪资':
@@ -1942,6 +1977,22 @@ def _build_a3_rows(company, company_code, ws, bank_records, payroll_year, payrol
                 40,
                 labor_row['cost_center'],
                 labor_row['order'],
+                voucher_type=BANK_VOUCHER_TYPE,
+            )
+        )
+
+    for severance_row in severance_rows:
+        rows.append(
+            _make_voucher_row(
+                'A3',
+                company_code,
+                posting_date,
+                '6601990001',
+                severance_row['amount'],
+                '离职补偿金',
+                40,
+                severance_row['cost_center'],
+                severance_row['order'],
                 voucher_type=BANK_VOUCHER_TYPE,
             )
         )
@@ -2009,7 +2060,7 @@ def _build_a3_rows(company, company_code, ws, bank_records, payroll_year, payrol
         tax_credit_row['P'] = BANK_REASON_CODE
         rows.append(tax_credit_row)
 
-    return _rebalance_expense_debit_rows(rows, ('6601110001',), f'{company} A3')
+    return _rebalance_expense_debit_rows(rows, ('6601110001', '6601990001'), f'{company} A3')
 
 
 def _amount_to_ten_thousand_yuan(amount):
@@ -2066,7 +2117,8 @@ def _build_company_key_tax_source_rows(company, payroll_path, bank_records, payr
 
     salary_tax = Decimal('0.00')
     labor_tax = Decimal('0.00')
-    for row_idx in range(3, ws.max_row + 1):
+    data_start_row = _find_payroll_header_row(ws) + 1
+    for row_idx in range(data_start_row, ws.max_row + 1):
         if _is_total_row(ws.cell(row_idx, 1).value):
             break
         item_type = _normalize_text(ws.cell(row_idx, 4).value)
@@ -2253,12 +2305,13 @@ def _build_a4_rows(company, company_code, ws, total_row_idx, payroll_year, payro
     tax_total = Decimal('0')
     other_total = Decimal('0')
 
-    for row_idx in range(3, ws.max_row + 1):
+    data_start_row = _find_payroll_header_row(ws) + 1
+    for row_idx in range(data_start_row, ws.max_row + 1):
         if _is_total_row(ws.cell(row_idx, 1).value):
             break
 
         item_type = _normalize_text(ws.cell(row_idx, 4).value)
-        if item_type == '劳务费':
+        if item_type in ('劳务费', '离职补偿金'):
             continue
 
         dept = _normalize_text(ws.cell(row_idx, 2).value)
@@ -2390,7 +2443,18 @@ def _build_a4_rows(company, company_code, ws, total_row_idx, payroll_year, payro
     return _rebalance_expense_debit_rows(rows, expense_accounts, f'{company} A4')
 
 
-def _collect_a5_base_data(ws):
+def _should_skip_one_time_june_2026_accrual(company, posting_year, posting_month, dept):
+    # The only 2060/WLS employee left in June 2026. This department therefore
+    # does not accrue or allocate payroll costs in June or July 2026.
+    return (
+        company == '耐数信息'
+        and posting_year == 2026
+        and posting_month in (6, 7)
+        and dept == 'WLS无线解决方案'
+    )
+
+
+def _collect_a5_base_data(ws, company, posting_year, posting_month):
     grouped_amounts = {}
     debit_totals = {}
     dept_by_cost_center = {}
@@ -2398,15 +2462,18 @@ def _collect_a5_base_data(ws):
     tax_total = Decimal('0')
     other_total = Decimal('0')
 
-    for row_idx in range(3, ws.max_row + 1):
+    data_start_row = _find_payroll_header_row(ws) + 1
+    for row_idx in range(data_start_row, ws.max_row + 1):
         if _is_total_row(ws.cell(row_idx, 1).value):
             break
 
         item_type = _normalize_text(ws.cell(row_idx, 4).value)
-        if item_type == '劳务费':
+        if item_type in ('劳务费', '离职补偿金'):
             continue
 
         dept = _normalize_department_for_order(ws.cell(row_idx, 2).value)
+        if _should_skip_one_time_june_2026_accrual(company, posting_year, posting_month, dept):
+            continue
         cost_center = _format_code(ws.cell(row_idx, 19).value)
         if cost_center and dept and cost_center not in dept_by_cost_center:
             dept_by_cost_center[cost_center] = dept
@@ -2435,8 +2502,8 @@ def _collect_a5_base_data(ws):
 
 
 def _build_a5_rows(company, company_code, ws, total_row_idx, payroll_year, payroll_month):
-    accrual_data = _collect_a5_base_data(ws)
     posting_year, posting_month = _shift_month(payroll_year, payroll_month, 1)
+    accrual_data = _collect_a5_base_data(ws, company, posting_year, posting_month)
     posting_date = _month_end_date(posting_year, posting_month)
     period_text = _period_text(posting_year, posting_month)
 
@@ -2535,12 +2602,13 @@ def _build_a5_rows(company, company_code, ws, total_row_idx, payroll_year, payro
             )
         )
 
-    return rows
+    expense_accounts = tuple(account for _, account, _ in ACCRUAL_DEBIT_SPECS)
+    return _rebalance_expense_debit_rows(rows, expense_accounts, f'{company} A5')
 
 
 def _build_a6_rows(company, company_code, ws, payroll_year, payroll_month, timesheet_context):
-    accrual_data = _collect_a5_base_data(ws)
     posting_year, posting_month = _shift_month(payroll_year, payroll_month, 1)
+    accrual_data = _collect_a5_base_data(ws, company, posting_year, posting_month)
     posting_date = _month_end_date(posting_year, posting_month)
     text = f'根据研发工时分摊计提的{posting_year}年{posting_month}月人工费用'
 
@@ -2822,6 +2890,8 @@ def _build_a10_rows(company, company_code, payroll_year, payroll_month, expense_
         dept = item['dept']
         if dept == 'OSD运营支持部' or 'OSD' in dept:
             continue
+        if _should_skip_one_time_june_2026_accrual(company, posting_year, posting_month, dept):
+            continue
 
         key = (
             item['gl_account'],
@@ -3049,7 +3119,15 @@ def _generate_voucher_files(
             actual_voucher_rows.extend(_build_a2_rows(company, company_code, bank_records, payroll_year, payroll_month))
         if run_options.wants_voucher('A3'):
             actual_voucher_rows.extend(
-                _build_a3_rows(company, company_code, company_ws, bank_records, payroll_year, payroll_month)
+                _build_a3_rows(
+                    company,
+                    company_code,
+                    company_ws,
+                    bank_records,
+                    payroll_year,
+                    payroll_month,
+                    timesheet_context,
+                )
             )
         if run_options.wants_voucher('A4'):
             actual_voucher_rows.extend(
@@ -3190,6 +3268,8 @@ def _save_company_workbooks(base_wb, base_dir, input_path, payroll_year, payroll
         company_output_path = _build_company_output_path(base_dir, company, payroll_year, payroll_month, input_path)
         company_wb = load_workbook(io.BytesIO(workbook_bytes))
         ws = company_wb[company_wb.sheetnames[0]]
+        header_row_idx = _find_payroll_header_row(ws)
+        data_start_row = header_row_idx + 1
 
         total_row_idx = _find_total_row(ws)
         if total_row_idx is None:
@@ -3198,7 +3278,7 @@ def _save_company_workbooks(base_wb, base_dir, input_path, payroll_year, payroll
         if ws.max_row > total_row_idx:
             ws.delete_rows(total_row_idx + 1, ws.max_row - total_row_idx)
 
-        for row_idx in range(total_row_idx - 1, 2, -1):
+        for row_idx in range(total_row_idx - 1, data_start_row - 1, -1):
             row_company = _normalize_text(ws.cell(row=row_idx, column=1).value)
             row_values = [ws.cell(row=row_idx, column=col_idx).value for col_idx in range(1, 21)]
             if all(_is_blank(value) for value in row_values):
@@ -3211,9 +3291,9 @@ def _save_company_workbooks(base_wb, base_dir, input_path, payroll_year, payroll
         if new_total_row_idx is None:
             raise ValueError(f'拆分 {company} 文件时总计行丢失')
 
-        _recalculate_total_row(ws, new_total_row_idx)
+        _recalculate_total_row(ws, new_total_row_idx, data_start_row)
         _clear_bank_summary(ws)
-        header_ref = ws['R2'] if ws.max_column >= 18 else ws['Q2']
+        header_ref = ws.cell(row=header_row_idx, column=18 if ws.max_column >= 18 else 17)
         _write_bank_summary(ws, bank_results, header_ref)
 
         company_wb.save(company_output_path)
@@ -3237,7 +3317,10 @@ def fill_first_sheet_ab(input_path, base_dir, mapping_path, bank_dir, log, run_o
     log('正在读取原始工资单…')
     wb = load_workbook(input_path)
     ws = wb[wb.sheetnames[0]]
+    header_row_idx = _find_payroll_header_row(ws)
+    data_start_row = header_row_idx + 1
     log(f'首个工作表：{ws.title}，共 {ws.max_row} 行')
+    log(f'工资单表头位于第 {header_row_idx} 行，数据从第 {data_start_row} 行开始', 'ok')
     log('正在读取 Mapping 表…')
     cost_center_map = _load_mappings(mapping_path)
     log('Mapping 表读取完成', 'ok')
@@ -3296,7 +3379,18 @@ def fill_first_sheet_ab(input_path, base_dir, mapping_path, bank_dir, log, run_o
     payroll_summary = {}
     rows_by_company = {}
 
-    for row_idx in range(1, ws.max_row + 1):
+    if _is_blank(ws.cell(row=data_start_row, column=1).value):
+        for probe_row_idx in range(data_start_row, ws.max_row + 1):
+            company_value = _normalize_text(ws.cell(row=probe_row_idx, column=1).value)
+            if _is_total_row(company_value):
+                break
+            if company_value:
+                if company_value == '耐数信息':
+                    last_a = '耐数电子'
+                    log('首个公司分组未写公司名称，按标准顺序识别为耐数电子', 'warn')
+                break
+
+    for row_idx in range(data_start_row, ws.max_row + 1):
         cell_a = ws.cell(row=row_idx, column=1)
         cell_b = ws.cell(row=row_idx, column=2)
 
@@ -3328,19 +3422,21 @@ def fill_first_sheet_ab(input_path, base_dir, mapping_path, bank_dir, log, run_o
     log(f'A 列填充 {fill_a} 个空白单元格', 'ok')
     log(f'B 列填充 {fill_b} 个空白单元格', 'ok')
 
-    header_ref = ws['R2'] if ws.max_column >= 18 else ws['Q2']
+    header_ref = ws.cell(row=header_row_idx, column=18 if ws.max_column >= 18 else 17)
     data_style_col = 18 if ws.max_column >= 18 else 17
-    ws['S2'].value = '成本中心'
-    _copy_cell_style(header_ref, ws['S2'])
-    ws['T2'].value = '内部订单'
-    _copy_cell_style(header_ref, ws['T2'])
+    s_header = ws.cell(row=header_row_idx, column=19)
+    t_header = ws.cell(row=header_row_idx, column=20)
+    s_header.value = '成本中心'
+    _copy_cell_style(header_ref, s_header)
+    t_header.value = '内部订单'
+    _copy_cell_style(header_ref, t_header)
 
     if ws.column_dimensions['R'].width:
         ws.column_dimensions['S'].width = ws.column_dimensions['R'].width
     if ws.column_dimensions['Q'].width:
         ws.column_dimensions['T'].width = ws.column_dimensions['Q'].width
 
-    for row_idx in range(3, total_row_idx):
+    for row_idx in range(data_start_row, total_row_idx):
         row_values = [ws.cell(row=row_idx, column=col).value for col in range(1, 19)]
         if all(_is_blank(value) for value in row_values):
             continue

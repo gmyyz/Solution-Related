@@ -59,6 +59,7 @@ from .options import (
 )
 from .workbook_utils import (
     _copy_cell_style,
+    _find_payroll_header_row,
     _find_total_row,
     _format_code,
     _is_blank,
@@ -301,6 +302,8 @@ def collect_input_health(base_dir, mapping_path, bank_dir, run_options):
 def _prepare_payroll_preview(input_path, cost_center_map, timesheet_context, selected_companies):
     wb = load_workbook(input_path)
     ws = wb[wb.sheetnames[0]]
+    header_row_idx = _find_payroll_header_row(ws)
+    data_start_row = header_row_idx + 1
 
     last_a = None
     last_b = None
@@ -312,7 +315,17 @@ def _prepare_payroll_preview(input_path, cost_center_map, timesheet_context, sel
     payroll_summary = {}
     rows_by_company = {}
 
-    for row_idx in range(1, ws.max_row + 1):
+    if _is_blank(ws.cell(row=data_start_row, column=1).value):
+        for probe_row_idx in range(data_start_row, ws.max_row + 1):
+            company_value = _normalize_text(ws.cell(row=probe_row_idx, column=1).value)
+            if _is_total_row(company_value):
+                break
+            if company_value:
+                if company_value == '耐数信息':
+                    last_a = '耐数电子'
+                break
+
+    for row_idx in range(data_start_row, ws.max_row + 1):
         cell_a = ws.cell(row=row_idx, column=1)
         cell_b = ws.cell(row=row_idx, column=2)
 
@@ -338,19 +351,21 @@ def _prepare_payroll_preview(input_path, cost_center_map, timesheet_context, sel
             last_b = cell_b.value
             last_b_style_cell = cell_b
 
-    header_ref = ws['R2'] if ws.max_column >= 18 else ws['Q2']
+    header_ref = ws.cell(row=header_row_idx, column=18 if ws.max_column >= 18 else 17)
     data_style_col = 18 if ws.max_column >= 18 else 17
-    ws['S2'].value = '成本中心'
-    _copy_cell_style(header_ref, ws['S2'])
-    ws['T2'].value = '内部订单'
-    _copy_cell_style(header_ref, ws['T2'])
+    s_header = ws.cell(row=header_row_idx, column=19)
+    t_header = ws.cell(row=header_row_idx, column=20)
+    s_header.value = '成本中心'
+    _copy_cell_style(header_ref, s_header)
+    t_header.value = '内部订单'
+    _copy_cell_style(header_ref, t_header)
 
     if ws.column_dimensions['R'].width:
         ws.column_dimensions['S'].width = ws.column_dimensions['R'].width
     if ws.column_dimensions['Q'].width:
         ws.column_dimensions['T'].width = ws.column_dimensions['Q'].width
 
-    for row_idx in range(3, total_row_idx):
+    for row_idx in range(data_start_row, total_row_idx):
         row_values = [ws.cell(row=row_idx, column=col).value for col in range(1, 19)]
         if all(_is_blank(value) for value in row_values):
             continue
@@ -446,6 +461,8 @@ def _build_company_preview_workbooks(base_wb, selected_companies):
     for company in selected_companies:
         company_wb = load_workbook(io.BytesIO(workbook_bytes))
         ws = company_wb[company_wb.sheetnames[0]]
+        header_row_idx = _find_payroll_header_row(ws)
+        data_start_row = header_row_idx + 1
         total_row_idx = _find_total_row(ws)
         if total_row_idx is None:
             raise ValueError('拆分公司文件时未找到“总计”行')
@@ -453,7 +470,7 @@ def _build_company_preview_workbooks(base_wb, selected_companies):
         if ws.max_row > total_row_idx:
             ws.delete_rows(total_row_idx + 1, ws.max_row - total_row_idx)
 
-        for row_idx in range(total_row_idx - 1, 2, -1):
+        for row_idx in range(total_row_idx - 1, data_start_row - 1, -1):
             row_company = _normalize_text(ws.cell(row=row_idx, column=1).value)
             row_values = [ws.cell(row=row_idx, column=col_idx).value for col_idx in range(1, 21)]
             if all(_is_blank(value) for value in row_values):
@@ -465,7 +482,7 @@ def _build_company_preview_workbooks(base_wb, selected_companies):
         new_total_row_idx = _find_total_row(ws)
         if new_total_row_idx is None:
             raise ValueError(f'拆分 {company} 文件时总计行丢失')
-        _recalculate_total_row(ws, new_total_row_idx)
+        _recalculate_total_row(ws, new_total_row_idx, data_start_row)
         snapshots[company] = {'workbook': company_wb, 'worksheet': ws, 'total_row_idx': new_total_row_idx}
 
     return snapshots
@@ -671,7 +688,15 @@ def run_startup_precheck(base_dir, mapping_path, bank_dir, run_options):
             if voucher_id == 'A2':
                 return _build_a2_rows(company, company_code, bank_records, payroll_year, payroll_month)
             if voucher_id == 'A3':
-                return _build_a3_rows(company, company_code, company_ws, bank_records, payroll_year, payroll_month)
+                return _build_a3_rows(
+                    company,
+                    company_code,
+                    company_ws,
+                    bank_records,
+                    payroll_year,
+                    payroll_month,
+                    timesheet_context,
+                )
             if voucher_id == 'A4':
                 return _build_a4_rows(company, company_code, company_ws, total_row_idx, payroll_year, payroll_month, timesheet_context)
             if voucher_id == 'A5':

@@ -4,9 +4,10 @@ from datetime import date, datetime
 from decimal import Decimal
 from itertools import combinations
 
-from openpyxl import load_workbook
+from .workbook_io import load_workbook, workbook_scope
 
 from .rules import MAX_BANK_MATCH_COMBO_SIZE
+from .bank_identity import TransactionIndex
 from .workbook_utils import (
     _extract_year_month,
     _format_code,
@@ -30,65 +31,62 @@ def _normalize_bank_date_key(value):
     return _normalize_text(value)
 
 
-def _load_bank_records_with_stats(bank_dir):
+@workbook_scope
+def _load_bank_records_with_stats(bank_dir, scope=None):
     bank_records = {}
-    seen_rows = set()
-    source_files = _find_bank_files(bank_dir)
-    stats = {
-        'source_file_count': len(source_files),
-        'scanned_row_count': 0,
-        'deduped_row_count': 0,
-        'kept_row_count': 0,
-    }
-
-    for path in source_files:
+    index = TransactionIndex()
+    files = _find_bank_files(bank_dir)
+    scanned = 0
+    for path in files:
         wb = load_workbook(path, data_only=True, read_only=True)
-        ws = wb[wb.sheetnames[0]]
-
-        for row_idx in range(2, ws.max_row + 1):
-            company_code = _format_code(ws.cell(row=row_idx, column=2).value)
-            bank_account = _format_code(ws.cell(row=row_idx, column=3).value)
-            trans_date = ws.cell(row=row_idx, column=4).value
-            trans_period = _extract_year_month(trans_date)
-            payment_name = _normalize_text(ws.cell(row=row_idx, column=13).value)
-            outgoing_amt = _to_money(ws.cell(row=row_idx, column=15).value)
-            usage = _normalize_text(ws.cell(row=row_idx, column=16).value)
-            bank_subject = _format_code(ws.cell(row=row_idx, column=34).value)
-
-            if not company_code or trans_period is None:
-                continue
-
-            stats['scanned_row_count'] += 1
-            row_identity = (
-                company_code,
-                _normalize_bank_date_key(trans_date),
-                outgoing_amt,
-                usage,
-                payment_name,
-                bank_subject,
-            )
-            if row_identity in seen_rows:
-                stats['deduped_row_count'] += 1
-                continue
-            seen_rows.add(row_identity)
-
-            key = (company_code, trans_period[0], trans_period[1])
-            bank_records.setdefault(key, []).append(
-                {
-                    'file': os.path.basename(path),
-                    'row_idx': row_idx,
-                    'company_code': company_code,
-                    'bank_account': bank_account,
-                    'trans_date': trans_date,
-                    'payment_name': payment_name,
-                    'outgoing_amt': outgoing_amt,
-                    'usage': usage,
-                    'bank_subject': bank_subject,
+        try:
+            ws = wb.worksheets[0]
+            iterator = ws.iter_rows(values_only=True)
+            headers = next(iterator, ())
+            id_col = next((i for i, v in enumerate(headers) if _normalize_text(v) == '交易流水号'), None)
+            for row_idx, values in enumerate(iterator, 2):
+                def at(col):
+                    return values[col - 1] if col <= len(values) else None
+                code = _format_code(at(2))
+                period = _extract_year_month(at(4))
+                if not code or period is None:
+                    continue
+                key = (code, *period)
+                if scope is not None and key not in scope:
+                    continue
+                record = {
+                    'file': os.path.abspath(path), 'sheet': ws.title, 'row_idx': row_idx,
+                    'company_code': code, 'bank_account': _format_code(at(3)),
+                    'trans_date': at(4), 'currency': _normalize_text(at(5)),
+                    'payment_name': _normalize_text(at(13)),
+                    'incoming_amt': _to_money(at(14)), 'outgoing_amt': _to_money(at(15)),
+                    'usage': _normalize_text(at(16)), 'counterparty_account': _format_code(at(20)),
+                    'transaction_id': _format_code(at(id_col + 1)) if id_col is not None else '',
+                    'bank_subject': _format_code(at(34)),
                 }
-            )
-            stats['kept_row_count'] += 1
+                scanned += 1
+                if index.add(record):
+                    bank_records.setdefault(key, []).append(record)
+        finally:
+            wb.close()
+    return {'records': bank_records, 'warnings': index.warnings, 'stats': {
+        'source_file_count': len(files), 'scanned_row_count': scanned,
+        'deduped_row_count': index.deduped, 'kept_row_count': len(index.records),
+        'warnings': index.warnings,
+    }}
 
-    return {'records': bank_records, 'stats': stats}
+
+def bank_scope(run_options):
+    from .options import COMPANY_NAME_TO_CODE
+    periods = set()
+    if run_options.wants_any('A1', 'A3'):
+        periods.add(run_options.processing_period)
+    if run_options.wants_voucher('A2'):
+        periods.add(run_options.payroll_period)
+        # Existing A2 generation uses the processing month's fund payments,
+        # while the HR reconciliation also looks at the payroll month.
+        periods.add(run_options.processing_period)
+    return {(COMPANY_NAME_TO_CODE[c], *period) for c in run_options.companies for period in periods}
 
 
 def _load_bank_records(bank_dir):

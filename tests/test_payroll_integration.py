@@ -114,9 +114,12 @@ class PayrollIntegrationTests(unittest.TestCase):
                         debit += Decimal(str(amount))
                     elif str(posting_key) == '50':
                         credit += Decimal(str(amount))
+                    totals[group] = [debit, credit]
+                    self.assertIsInstance(amount, str)
                 self.assertEqual(set(totals), {'A5', 'A6'})
                 for group, (debit, credit) in totals.items():
                     self.assertEqual(debit, credit, f'{group} 借贷不平：{debit} != {credit}')
+                    self.assertEqual(debit, Decimal('100.00'))
             finally:
                 wb.close()
 

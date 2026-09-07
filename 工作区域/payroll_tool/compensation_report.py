@@ -4,10 +4,12 @@ from itertools import combinations
 from pathlib import Path
 import re
 
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
+from .workbook_io import load_workbook, workbook_scope
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+from .bank_identity import TransactionIndex
 from .rules import (
     BONUS_NET_BY_PAYMENT,
     BONUS_NOTES,
@@ -194,7 +196,7 @@ def _collect_payroll_files(monthly_input_root):
     for batch in sorted(monthly_input_root.glob('2026-*处理批次*')):
         files.extend(sorted((batch / '01_工资单').glob('*.xlsx')))
 
-    seen = set()
+    seen = TransactionIndex()
     result = []
     for path in files:
         if not _looks_like_payroll_file(path):
@@ -223,6 +225,7 @@ def _new_payroll_bucket():
     return bucket
 
 
+@workbook_scope
 def _load_payroll_summary(monthly_input_root):
     rows = []
     for path in _collect_payroll_files(monthly_input_root):
@@ -238,8 +241,8 @@ def _load_payroll_summary(monthly_input_root):
         totals = {code: _new_payroll_bucket() for code in COMPANY_LABELS}
         current_company = ''
 
-        for row_idx in range(header_row + 1, ws.max_row + 1):
-            first_value = ws.cell(row_idx, company_col).value
+        for row_idx, ws_cells in enumerate(ws.iter_rows(min_row=header_row + 1), header_row + 1):
+            first_value = ws_cells[(company_col) - 1].value
             if str(first_value or '').strip() == '总计':
                 break
             if first_value not in (None, ''):
@@ -248,19 +251,19 @@ def _load_payroll_summary(monthly_input_root):
                 continue
 
             bucket = totals[current_company]
-            row_type = str(ws.cell(row_idx, type_col).value or '').strip()
+            row_type = str(ws_cells[(type_col) - 1].value or '').strip()
             for key, col_idx in cols.items():
-                bucket[key] += _to_decimal(ws.cell(row_idx, col_idx).value)
+                bucket[key] += _to_decimal(ws_cells[(col_idx) - 1].value)
             if row_type == '劳务费':
-                bucket['labor_gross'] += _to_decimal(ws.cell(row_idx, cols['gross']).value)
-                bucket['labor_net'] += _to_decimal(ws.cell(row_idx, cols['net_salary']).value)
-                bucket['labor_income_tax'] += _to_decimal(ws.cell(row_idx, cols['salary_tax']).value)
+                bucket['labor_gross'] += _to_decimal(ws_cells[(cols['gross']) - 1].value)
+                bucket['labor_net'] += _to_decimal(ws_cells[(cols['net_salary']) - 1].value)
+                bucket['labor_income_tax'] += _to_decimal(ws_cells[(cols['salary_tax']) - 1].value)
             elif row_type == '离职补偿金':
-                bucket['severance_net'] += _to_decimal(ws.cell(row_idx, cols['net_salary']).value)
+                bucket['severance_net'] += _to_decimal(ws_cells[(cols['net_salary']) - 1].value)
             else:
-                bucket['salary_gross'] += _to_decimal(ws.cell(row_idx, cols['gross']).value)
-                bucket['salary_net'] += _to_decimal(ws.cell(row_idx, cols['net_salary']).value)
-                bucket['salary_income_tax'] += _to_decimal(ws.cell(row_idx, cols['salary_tax']).value)
+                bucket['salary_gross'] += _to_decimal(ws_cells[(cols['gross']) - 1].value)
+                bucket['salary_net'] += _to_decimal(ws_cells[(cols['net_salary']) - 1].value)
+                bucket['salary_income_tax'] += _to_decimal(ws_cells[(cols['salary_tax']) - 1].value)
 
         for code, values in totals.items():
             if not any(values.values()):
@@ -339,6 +342,8 @@ def _is_outsourced_labor_payment(counterparty):
 
 
 def _load_standard_bank_records(path, ws, records, seen, stats):
+    headers = [str(c.value or '').strip() for c in ws[1]]
+    id_col = headers.index('交易流水号') + 1 if '交易流水号' in headers else None
     for row_idx in range(2, ws.max_row + 1):
         code = _company_code(ws.cell(row_idx, 2).value)
         year_month = _extract_year_month(ws.cell(row_idx, 4).value)
@@ -361,6 +366,12 @@ def _load_standard_bank_records(path, ws, records, seen, stats):
             outgoing_amt,
             usage,
             bank_subject,
+            bank_account=str(ws.cell(row_idx, 3).value or '').strip(),
+            currency=str(ws.cell(row_idx, 5).value or '').strip(),
+            incoming_amt=_to_money(ws.cell(row_idx, 14).value),
+            counterparty_account=str(ws.cell(row_idx, 20).value or '').strip(),
+            transaction_id=str(ws.cell(row_idx, id_col).value or '').strip() if id_col else '',
+            sheet=ws.title,
         )
 
 
@@ -397,6 +408,7 @@ def _load_cmb_bank_records(path, ws, records, seen, stats):
             outgoing_amt,
             usage,
             counterparty_account,
+            counterparty_account=counterparty_account, sheet=ws.title,
         )
 
 
@@ -413,13 +425,9 @@ def _append_bank_record(
     outgoing_amt,
     usage,
     bank_subject,
+    **metadata,
 ):
     stats['scanned_row_count'] += 1
-    identity = (code, _normalize_bank_date(trans_date), outgoing_amt, usage, payment_name)
-    if identity in seen:
-        stats['deduped_row_count'] += 1
-        return
-    seen.add(identity)
     record = {
         'file': str(path),
         'row_idx': row_idx,
@@ -430,10 +438,15 @@ def _append_bank_record(
         'usage': usage,
         'bank_subject': bank_subject,
     }
+    record.update(metadata)
+    if not seen.add(record):
+        stats['deduped_row_count'] += 1
+        return
     records.setdefault((code, year_month[0], year_month[1]), []).append(record)
     stats['kept_row_count'] += 1
 
 
+@workbook_scope
 def _load_bank_records(monthly_input_root):
     records = {}
     seen = set()
@@ -447,6 +460,7 @@ def _load_bank_records(monthly_input_root):
             _load_cmb_bank_records(path, ws, records, seen, stats)
         else:
             _load_standard_bank_records(path, ws, records, seen, stats)
+    stats['warnings'] = seen.warnings
     return records, stats
 
 
@@ -722,10 +736,10 @@ def _write_workbook(output_path, output_rows):
     wb.save(output_path)
 
 
-def generate_compensation_report(base_dir):
+def generate_compensation_report(base_dir, output_path=None):
     base_path = Path(base_dir)
     monthly_input_root = base_path / '02_月度输入'
-    output_path = base_path / '03_运行输出' / '实发薪酬表.xlsx'
+    output_path = Path(output_path) if output_path else base_path / '03_运行输出' / '实发薪酬表.xlsx'
 
     payroll_rows = _load_payroll_summary(monthly_input_root)
     bank_records, bank_stats = _load_bank_records(monthly_input_root)

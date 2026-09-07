@@ -2247,6 +2247,7 @@ def _build_company_key_tax_source_rows(company, payroll_path, bank_records, payr
         '工资薪金个税与劳务个税合计，并与个税国库流水匹配',
         tax_note,
     )
+    wb.close()
     return rows
 
 
@@ -2450,6 +2451,15 @@ def _should_skip_one_time_june_2026_accrual(company, posting_year, posting_month
         company == '耐数信息'
         and posting_year == 2026
         and posting_month in (6, 7)
+        and dept == 'WLS无线解决方案'
+    )
+
+
+def _should_skip_one_time_august_2026_a10(company, posting_year, posting_month, dept):
+    return (
+        company == '耐数信息'
+        and posting_year == 2026
+        and posting_month == 8
         and dept == 'WLS无线解决方案'
     )
 
@@ -2890,6 +2900,8 @@ def _build_a10_rows(company, company_code, payroll_year, payroll_month, expense_
         dept = item['dept']
         if dept == 'OSD运营支持部' or 'OSD' in dept:
             continue
+        if _should_skip_one_time_august_2026_a10(company, posting_year, posting_month, dept):
+            continue
         if _should_skip_one_time_june_2026_accrual(company, posting_year, posting_month, dept):
             continue
 
@@ -3066,7 +3078,8 @@ def _generate_voucher_files(
 ):
     run_options = normalize_run_options(run_options)
     template_path = _get_voucher_template_path(base_dir)
-    template_bytes = open(template_path, 'rb').read()
+    with open(template_path, 'rb') as template_file:
+        template_bytes = template_file.read()
     voucher_paths = {}
     validation_summary = {}
     co_context = None
@@ -3248,6 +3261,8 @@ def _generate_voucher_files(
             log(f'{company} A1-A4 科目对冲校验通过', 'ok')
         else:
             log(f'{company} 未选择完整的 A1-A4，已跳过跨凭证对冲校验', 'warn')
+
+        company_wb.close()
 
     return voucher_paths, validation_summary
 

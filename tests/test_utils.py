@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '工作区域'))
 
 from payroll_tool.banking import _match_bank_record_combination  # noqa: E402
-from payroll_tool.core import _allocate_amount_by_weights  # noqa: E402
+from payroll_tool.core import _allocate_amount_by_weights, _should_skip_one_time_august_2026_a10  # noqa: E402
 from payroll_tool.rules import MAX_BANK_MATCH_COMBO_SIZE  # noqa: E402
 from payroll_tool.workbook_utils import _to_decimal, _to_money  # noqa: E402
 
@@ -23,6 +23,11 @@ class UtilityTests(unittest.TestCase):
         result = _allocate_amount_by_weights(Decimal('100.00'), [('a', 1), ('b', 1), ('c', 1)])
         self.assertEqual(sum(result.values()), Decimal('100.00'))
         self.assertEqual(sorted(result.values()), [Decimal('33.33'), Decimal('33.33'), Decimal('33.34')])
+
+    def test_wls_a10_skip_is_limited_to_august_2026(self):
+        self.assertTrue(_should_skip_one_time_august_2026_a10('耐数信息', 2026, 8, 'WLS无线解决方案'))
+        self.assertFalse(_should_skip_one_time_august_2026_a10('耐数信息', 2026, 9, 'WLS无线解决方案'))
+        self.assertFalse(_should_skip_one_time_august_2026_a10('耐数电子', 2026, 8, 'WLS无线解决方案'))
 
     def test_bank_combination_match(self):
         records = [

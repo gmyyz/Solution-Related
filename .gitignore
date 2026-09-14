@@ -5,6 +5,11 @@
 /工作区域/05_流程规范/
 *
 !.gitignore
+!requirements.txt
+!README.md
+!项目会话与历史整理.md
+!现状与历史差异说明.md
+!质量加固与验证记录.md
 !.git/
 !.git/**
 !工作区域/

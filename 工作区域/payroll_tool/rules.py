@@ -5,6 +5,17 @@ MAX_BANK_MATCH_COMBO_SIZE = 6
 BANK_VOUCHER_TYPE = 'KZ'
 BANK_REASON_CODE = '202'
 
+# Date-bounded exceptions: never infer that a departed department stays excluded.
+DEPARTMENT_VOUCHER_SKIPS = {
+    ('耐数信息', 2026, 6, 'WLS无线解决方案'): frozenset({'A5', 'A6', 'A10'}),
+    ('耐数信息', 2026, 7, 'WLS无线解决方案'): frozenset({'A5', 'A6', 'A10'}),
+    ('耐数信息', 2026, 8, 'WLS无线解决方案'): frozenset({'A10'}),
+}
+
+
+def skips_department(company, year, month, department, voucher):
+    return voucher in DEPARTMENT_VOUCHER_SKIPS.get((company, year, month, department), ())
+
 DEPARTMENT_DAILY_ORDER_OVERRIDES = {
     ('耐数信息', 'HLD硬件逻辑部'): '9202197',
 }

@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass
 from datetime import date
+from .publication import output_target
 
 COMPANY_OPTIONS = (
     ('耐数电子', '2050 耐数电子'),
@@ -224,8 +225,8 @@ def build_batch_layout(base_dir: str, processing_year: int, processing_month: in
 
     master_data_root = os.path.join(base_dir, '01_基础资料')
     monthly_input_root = os.path.join(base_dir, '02_月度输入', batch_name)
-    run_output_root = os.path.join(base_dir, '03_运行输出', batch_name)
-    archive_root = os.path.join(base_dir, '04_归档留痕', batch_name)
+    run_output_root = output_target(os.path.join(base_dir, '03_运行输出', batch_name))
+    archive_root = output_target(os.path.join(base_dir, '04_归档留痕', batch_name))
     governance_root = os.path.join(base_dir, '05_流程规范')
 
     mapping_path = _prefer_existing_path(

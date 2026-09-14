@@ -5,7 +5,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from .banking import BANK_FILE_PATTERN, _find_bank_files
-from .core import (
+from .theme import (
     COLOR_BG,
     COLOR_BORDER,
     COLOR_CARD,
@@ -18,6 +18,8 @@ from .core import (
     COLOR_WARNING,
     _apply_style,
     _btn,
+)
+from .paths import (
     _find_raw_files,
     _get_bank_dir,
     _get_bonus_path,
@@ -42,6 +44,7 @@ from .options import (
 )
 from .pipeline import execute_payroll_run
 from .precheck import run_startup_precheck
+from .publication import workspace_lock, recover_pending
 
 
 class MainWindow:
@@ -59,6 +62,11 @@ class MainWindow:
         self._phase = 'GUIDE'
         self._q = queue.Queue()
         self._base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        try:
+            with workspace_lock(self._base_dir):
+                recover_pending(self._base_dir)
+        except Exception as exc:
+            messagebox.showwarning('发布状态检查', str(exc))
         self._raw_dir = _get_raw_dir(self._base_dir)
         self._mapping_path = _get_mapping_path(self._base_dir)
         self._bank_dir = _get_bank_dir(self._base_dir)
@@ -1001,8 +1009,17 @@ class MainWindow:
                     'can_run': False,
                     'overall_status': 'error',
                 }
-            self.root.after(0, lambda: self._finish_precheck(signature, result))
+            completion.put((signature, result))
 
+        completion = queue.Queue()
+        def poll_completion():
+            try:
+                completed_signature, result = completion.get_nowait()
+            except queue.Empty:
+                self.root.after(30, poll_completion)
+            else:
+                self._finish_precheck(completed_signature, result)
+        self.root.after(30, poll_completion)
         threading.Thread(target=worker, daemon=True).start()
 
     def _finish_precheck(self, signature, result):
@@ -1378,7 +1395,7 @@ class MainWindow:
                 if run_options.wants_voucher('A10'):
                     log(f'待分摊费用：{shared_path}')
                 if requires_bank_data(run_options):
-                    log(f'银行流水目录：{layout.bank_dir}（全目录扫描，按处理月份筛选，完全相同行自动去重）')
+                    log(f'银行流水目录：{layout.bank_dir}（全目录扫描，按处理月份筛选，按可靠交易流水号去重，无标识跨文件重复需核对）')
 
                 self._q.put(('step', 2, '填充首个工作表 A/B 列空白'))
                 self._q.put(('step', 3, '校验实发金额并匹配成本中心/内部订单'))
@@ -1405,7 +1422,14 @@ class MainWindow:
                     summary = f"处理完成，但有 {total_issues} 项异常已标红"
                 elif voucher_issue_count:
                     summary = f"处理完成，但有 {voucher_issue_count} 项凭证对冲异常"
-                self._q.put(('done', True, summary, result))
+                if result.get('optional_errors'):
+                    summary += '；附属报表本次未更新，请查看日志'
+                    for error in result['optional_errors']:
+                        log(error, 'warn')
+                log('本次历史位置：' + result['history_path'], 'ok')
+                if result.get('status') == 'needs_recovery':
+                    summary = '待恢复：凭证可能已交付，附属发布未完成；请关闭占用文件后重新启动'
+                self._q.put(('done', result.get('status') != 'needs_recovery', summary, result))
             except Exception as exc:
                 self._q.put(('log', str(exc), 'err'))
                 self._q.put(('done', False, str(exc), None))

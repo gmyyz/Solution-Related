@@ -57,9 +57,23 @@ class BankIdentityTests(unittest.TestCase):
                 ws.append(row); wb.save(Path(tmp)/name); wb.close()
             with self.assertRaises(BankIdentityError):
                 _load_bank_records_with_stats(tmp)
+            self.assertEqual(_load_bank_records_with_stats(tmp,scope={('2060',2026,3)})['stats']['kept_row_count'],0)
             second=Path(tmp)/'银行流水2.xlsx'; second.unlink()
             self.assertEqual(_load_bank_records_with_stats(tmp)['stats']['kept_row_count'], 1)
             (Path(tmp)/'银行流水1.xlsx').unlink()
+
+    def test_legacy_cmb_report_keeps_single_file_repeated_payments(self):
+        from payroll_tool.compensation_report import _load_cmb_bank_records
+        wb=Workbook();ws=wb.active
+        for row in [14,15]:
+            for col,value in {4:'2025-03-01',8:100,11:'代发工资',20:'员工',21:'counterparty'}.items():
+                ws.cell(row,col,value)
+        index=TransactionIndex();records={};stats={'scanned_row_count':0,'deduped_row_count':0,'kept_row_count':0}
+        try:
+            _load_cmb_bank_records(Path('2050招行对帐单-2503.xlsx'),ws,records,index,stats)
+            self.assertEqual(stats['kept_row_count'],2)
+            self.assertTrue(index.warnings)
+        finally:wb.close()
 
 
 if __name__ == '__main__': unittest.main()

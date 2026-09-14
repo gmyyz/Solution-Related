@@ -2,9 +2,9 @@ import calendar
 import os
 from datetime import datetime
 
-from openpyxl import load_workbook
+from .workbook_io import load_workbook, workbook_scope
 
-from .core import _get_timesheet_path
+from .paths import _get_timesheet_path
 from .workbook_utils import _copy_cell_style, _normalize_text
 
 
@@ -49,6 +49,7 @@ def _build_period_value(year, month):
     return int(f'{year % 100:02d}{month:02d}')
 
 
+@workbook_scope
 def _iter_month_rows(timesheet_path, target_year, target_month):
     wb = load_workbook(timesheet_path, data_only=True, read_only=True)
     ws = wb[SOURCE_SHEET_NAME]
@@ -73,6 +74,7 @@ def _iter_month_rows(timesheet_path, target_year, target_month):
         )
 
 
+@workbook_scope
 def list_available_months(base_dir, year=2026):
     timesheet_path = _get_timesheet_path(base_dir)
     wb = load_workbook(timesheet_path, data_only=True, read_only=True)
@@ -107,6 +109,7 @@ def _prepare_output_sheet(ws):
     return original_last_row
 
 
+@workbook_scope
 def export_timesheet_weekly_report(base_dir, year, month):
     timesheet_path = _get_timesheet_path(base_dir)
     template_path = _get_template_path(base_dir)

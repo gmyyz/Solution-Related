@@ -172,5 +172,54 @@ def _match_salary_combination(salary_records, target_amount):
     return _match_bank_record_combination(salary_records, target_amount, '代发工资')
 
 
+def _match_salary_excluding_bonus(salary_records, target_amount, excluded_bonus=Decimal('0.00')):
+    target = _to_money(target_amount)
+    bonus = _to_money(excluded_bonus)
+    if bonus == Decimal('0.00'):
+        return _match_salary_combination(salary_records, target)
+
+    gross_target = (target + bonus).quantize(Decimal('0.01'))
+    gross_match = _match_salary_combination(salary_records, gross_target)
+    if not gross_match['matched']:
+        return gross_match
+
+    remaining = bonus
+    adjusted_by_id = {}
+    for record in sorted(
+        gross_match['matched_records'],
+        key=lambda item: item['outgoing_amt'],
+        reverse=True,
+    ):
+        adjusted = dict(record)
+        deduction = min(adjusted['outgoing_amt'], remaining)
+        adjusted['outgoing_amt'] = (adjusted['outgoing_amt'] - deduction).quantize(Decimal('0.01'))
+        remaining -= deduction
+        adjusted_by_id[id(record)] = adjusted
+        if remaining == Decimal('0.00'):
+            break
+
+    if remaining != Decimal('0.00'):
+        raise ValueError(f'年终奖扣除金额 {bonus} 大于匹配到的代发工资 {gross_target}')
+
+    adjusted_records = []
+    for record in gross_match['matched_records']:
+        adjusted = adjusted_by_id.get(id(record), dict(record))
+        if adjusted['outgoing_amt'] != Decimal('0.00'):
+            adjusted_records.append(adjusted)
+
+    return {
+        **gross_match,
+        'matched_amount': target,
+        'matched_records': adjusted_records,
+        'gross_matched_records': gross_match['matched_records'],
+        'gross_matched_amount': gross_target,
+        'excluded_bonus': bonus,
+        'note': (
+            f'{gross_match["note"]}；银行代发合计 {gross_target} '
+            f'扣除年终奖 {bonus} 后按普通工资 {target} 入账'
+        ),
+    }
+
+
 def _match_treasury_combination(records, target_amount, label):
     return _match_bank_record_combination(_get_treasury_records(records), target_amount, label)

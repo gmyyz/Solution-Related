@@ -34,6 +34,16 @@ BONUS_NET_BY_PAYMENT = {
     ('2060', 2025, 3): Decimal('945263.44'),
     ('2050', 2026, 3): Decimal('992732.96'),
     ('2060', 2026, 3): Decimal('349912.24'),
+    ('2050', 2026, 9): Decimal('607833.20'),
+    ('2060', 2026, 9): Decimal('264858.80'),
+}
+
+# These bonuses are embedded in the payroll Q column and in the salary bank
+# transfers. They are excluded from payroll allocation and ordinary salary
+# amounts, then posted as separate debit/credit rows in A3.
+EMBEDDED_BONUS_NET_BY_PAYMENT = {
+    ('2050', 2026, 9): Decimal('607833.20'),
+    ('2060', 2026, 9): Decimal('264858.80'),
 }
 
 BONUS_TAX_BY_PAYMENT = {
@@ -48,6 +58,8 @@ BONUS_NOTES = {
     ('2060', 2025, 3): '年终奖实发按补充信息列示；流水定位：2060招行对帐单-2503.xlsx第17行',
     ('2050', 2026, 3): '年终奖实发按补充信息列示；银行流水两笔：937,881.44 + 54,851.52 = 992,732.96',
     ('2060', 2026, 3): '年终奖实发按补充信息列示；流水定位：银行流水-206003.xlsx第3行',
+    ('2050', 2026, 9): '银行代发含年终奖 607,833.20；工资分摊不含年终奖，A3单列年终奖借方及银行贷方',
+    ('2060', 2026, 9): '银行代发含年终奖 264,858.80；工资分摊不含年终奖，A3单列年终奖借方及银行贷方',
 }
 
 FUND_BANK_OVERRIDE = {

@@ -2,6 +2,7 @@
 from decimal import Decimal, ROUND_HALF_UP
 from .workbook_io import load_workbook, workbook_scope
 from .contexts import _lookup_internal_order_from_timesheet
+from .rules import EMBEDDED_BONUS_NET_BY_PAYMENT
 from .workbook_utils import (
     _find_payroll_header_row, _is_blank, _normalize_text, _is_total_row,
     _copy_cell_style, _to_decimal, _to_money, _mark_row_red,
@@ -9,7 +10,13 @@ from .workbook_utils import (
 
 
 @workbook_scope
-def _prepare_payroll_preview(input_path, cost_center_map, timesheet_context, selected_companies):
+def _prepare_payroll_preview(
+    input_path,
+    cost_center_map,
+    timesheet_context,
+    selected_companies,
+    payment_period=None,
+):
     wb = load_workbook(input_path)
     ws = wb[wb.sheetnames[0]]
     header_row_idx = _find_payroll_header_row(ws)
@@ -64,6 +71,37 @@ def _prepare_payroll_preview(input_path, cost_center_map, timesheet_context, sel
             last_b = cell_b.value
             last_b_style_cell = cell_b
 
+    embedded_bonus_adjustments = {}
+    if payment_period:
+        company_codes = {'耐数电子': '2050', '耐数信息': '2060'}
+        for company in selected_companies:
+            company_code = company_codes.get(company)
+            bonus = EMBEDDED_BONUS_NET_BY_PAYMENT.get((company_code, *payment_period))
+            if bonus is None:
+                continue
+
+            raw_total = Decimal('0')
+            recalculated_total = Decimal('0')
+            for row_idx in range(data_start_row, total_row_idx):
+                if _normalize_text(ws.cell(row=row_idx, column=1).value) != company:
+                    continue
+                expected_raw = _to_decimal(ws.cell(row=row_idx, column=5).value)
+                for col_idx in range(11, 17):
+                    expected_raw -= _to_decimal(ws.cell(row=row_idx, column=col_idx).value)
+                raw_total += _to_decimal(ws.cell(row=row_idx, column=17).value)
+                recalculated_total += expected_raw
+
+            detected_bonus = (raw_total - recalculated_total).quantize(
+                Decimal('0.01'),
+                rounding=ROUND_HALF_UP,
+            )
+            if detected_bonus != bonus:
+                raise ValueError(
+                    f'{company} {payment_period[0]}-{payment_period[1]:02d} 工资单内含年终奖 '
+                    f'应为 {bonus}，按实发逻辑检测为 {detected_bonus}，已停止处理'
+                )
+            embedded_bonus_adjustments[company] = bonus
+
     header_ref = ws.cell(row=header_row_idx, column=18 if ws.max_column >= 18 else 17)
     data_style_col = 18 if ws.max_column >= 18 else 17
     s_header = ws.cell(row=header_row_idx, column=19)
@@ -91,10 +129,12 @@ def _prepare_payroll_preview(input_path, cost_center_map, timesheet_context, sel
         if company not in selected_companies:
             continue
 
-        expected_actual = _to_decimal(ws.cell(row=row_idx, column=5).value)
+        expected_raw = _to_decimal(ws.cell(row=row_idx, column=5).value)
         for col_idx in range(11, 17):
-            expected_actual -= _to_decimal(ws.cell(row=row_idx, column=col_idx).value)
-        expected_actual = expected_actual.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            expected_raw -= _to_decimal(ws.cell(row=row_idx, column=col_idx).value)
+        expected_actual = expected_raw.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        if company in embedded_bonus_adjustments:
+            ws.cell(row=row_idx, column=17).value = float(expected_raw)
         actual_value = _to_money(ws.cell(row=row_idx, column=17).value)
 
         company_summary = payroll_summary.setdefault(
@@ -164,4 +204,5 @@ def _prepare_payroll_preview(input_path, cost_center_map, timesheet_context, sel
         'company_issue_counts': company_issue_counts,
         'payroll_summary': payroll_summary,
         'rows_by_company': rows_by_company,
+        'embedded_bonus_adjustments': embedded_bonus_adjustments,
     }

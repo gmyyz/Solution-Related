@@ -7,7 +7,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / '工作区域'))
 
-from payroll_tool.banking import _match_bank_record_combination  # noqa: E402
+from payroll_tool.banking import (  # noqa: E402
+    _match_bank_record_combination,
+    _match_salary_excluding_bonus,
+)
 from payroll_tool.core import _allocate_amount_by_weights, _should_skip_one_time_august_2026_a10  # noqa: E402
 from payroll_tool.rules import MAX_BANK_MATCH_COMBO_SIZE  # noqa: E402
 from payroll_tool.workbook_utils import _to_decimal, _to_money  # noqa: E402
@@ -42,6 +45,24 @@ class UtilityTests(unittest.TestCase):
 
     def test_bank_combination_respects_configured_limit(self):
         self.assertEqual(MAX_BANK_MATCH_COMBO_SIZE, 6)
+
+    def test_salary_bank_amount_excludes_embedded_bonus(self):
+        records = [
+            {'outgoing_amt': Decimal('1030309.46')},
+            {'outgoing_amt': Decimal('64589.19')},
+        ]
+        result = _match_salary_excluding_bonus(
+            records,
+            Decimal('487065.45'),
+            Decimal('607833.20'),
+        )
+        self.assertTrue(result['matched'])
+        self.assertEqual(result['matched_amount'], Decimal('487065.45'))
+        self.assertEqual(
+            sum((record['outgoing_amt'] for record in result['matched_records']), Decimal('0.00')),
+            Decimal('487065.45'),
+        )
+        self.assertEqual(records[0]['outgoing_amt'], Decimal('1030309.46'))
 
 
 if __name__ == '__main__':

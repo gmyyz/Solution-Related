@@ -6,7 +6,7 @@ from .banking import (
     _load_bank_records,
     _load_bank_records_with_stats,
     _match_bank_record_combination,
-    _match_salary_combination,
+    _match_salary_excluding_bonus,
     _match_treasury_combination,
     _normalize_bank_date_key,
     _summarize_bank_records,
@@ -15,6 +15,7 @@ from .rules import (
     BANK_REASON_CODE,
     BANK_VOUCHER_TYPE,
     BONUS_DEPARTMENT_ACCRUAL_OVERRIDES,
+    EMBEDDED_BONUS_NET_BY_PAYMENT,
     BONUS_TAX_BY_PAYMENT_PERIOD,
     DEPARTMENT_DAILY_ORDER_OVERRIDES,
 )
@@ -233,7 +234,15 @@ def _build_a3_rows(company, company_code, ws, bank_records, payroll_year, payrol
     bonus_tax_adjustment = _get_bonus_tax_adjustment(company_code, next_year, next_month)
     bank_tax_target = (bank_tax_target + bonus_tax_adjustment).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
-    salary_match = _match_salary_combination(salary_records, salary_match_target)
+    embedded_bonus = EMBEDDED_BONUS_NET_BY_PAYMENT.get(
+        (company_code, next_year, next_month),
+        Decimal('0.00'),
+    )
+    salary_match = _match_salary_excluding_bonus(
+        salary_records,
+        salary_match_target,
+        embedded_bonus,
+    )
     if not salary_match['matched'] or not salary_match['matched_records']:
         raise ValueError(f'{company} A3 未找到匹配工资金额的银行流水组合')
     tax_match = _match_treasury_combination(month_records, bank_tax_target, '个税国库流水')
@@ -311,6 +320,19 @@ def _build_a3_rows(company, company_code, ws, bank_records, payroll_year, payrol
                 voucher_type=BANK_VOUCHER_TYPE,
             )
         )
+    if embedded_bonus != Decimal('0.00'):
+        rows.append(
+            _make_voucher_row(
+                'A3',
+                company_code,
+                posting_date,
+                '2211010001',
+                embedded_bonus,
+                '支付2025年9月部分年终奖',
+                40,
+                voucher_type=BANK_VOUCHER_TYPE,
+            )
+        )
 
     for record in salary_match['matched_records']:
         credit_row = _make_voucher_row(
@@ -327,6 +349,23 @@ def _build_a3_rows(company, company_code, ws, bank_records, payroll_year, payrol
         rows.append(
             credit_row
         )
+
+    if embedded_bonus != Decimal('0.00'):
+        gross_salary_records = salary_match.get('gross_matched_records', [])
+        if not gross_salary_records:
+            raise ValueError(f'{company} A3 年终奖银行贷方缺少可复制的工资流水')
+        bonus_credit_row = _make_voucher_row(
+            'A3',
+            company_code,
+            posting_date,
+            gross_salary_records[0]['bank_subject'],
+            embedded_bonus,
+            '支付2025年9月部分年终奖',
+            50,
+            voucher_type=BANK_VOUCHER_TYPE,
+        )
+        bonus_credit_row['P'] = BANK_REASON_CODE
+        rows.append(bonus_credit_row)
 
     for tax_record in tax_records:
         tax_credit_row = _make_voucher_row(

@@ -10,7 +10,7 @@ from .banking import (
     _find_bank_files,
     _load_bank_records_with_stats,
     _match_bank_record_combination,
-    _match_salary_combination,
+    _match_salary_excluding_bonus,
     _summarize_bank_records,
 )
 from .domain import (
@@ -53,6 +53,7 @@ from .validation import (
     _validate_cross_group_accounts,
     _validate_voucher_groups,
 )
+from .rules import EMBEDDED_BONUS_NET_BY_PAYMENT
 from .artifacts import (
     _write_utf8_file,
 )
@@ -477,7 +478,20 @@ def run_startup_precheck(base_dir, mapping_path, bank_dir, run_options):
         )
         _append_line(lines, 'ok', f'A10 待分摊费用文件读取通过：处理月份 {run_options.processing_label}')
 
-    preview = _prepare_payroll_preview(raw_files[0], cost_center_map, timesheet_context, set(run_options.companies))
+    preview = _prepare_payroll_preview(
+        raw_files[0],
+        cost_center_map,
+        timesheet_context,
+        set(run_options.companies),
+        payment_period=run_options.processing_period,
+    )
+    for company, bonus in preview['embedded_bonus_adjustments'].items():
+        message = (
+            f'{company}银行代发内含年终奖 {bonus}，工资分摊按不含年终奖口径生成；'
+            'A3将单列年终奖借方及银行贷方'
+        )
+        result['warnings'].append(message)
+        _append_line(lines, 'warn', message)
     company_snapshots = _build_company_preview_workbooks(preview['workbook'], run_options.companies)
     payroll_year, payroll_month = payroll_period
     next_year = payroll_year
@@ -506,9 +520,14 @@ def run_startup_precheck(base_dir, mapping_path, bank_dir, run_options):
             salary_tax_bank = _summarize_bank_records(bank_records, company_code, next_year, next_month)
             fund_reconcile_bank = _summarize_bank_records(bank_records, company_code, payroll_year, payroll_month)
             fund_voucher_bank = _summarize_bank_records(bank_records, company_code, next_year, next_month)
-            salary_match = _match_salary_combination(
+            embedded_bonus = EMBEDDED_BONUS_NET_BY_PAYMENT.get(
+                (company_code, next_year, next_month),
+                Decimal('0.00'),
+            )
+            salary_match = _match_salary_excluding_bonus(
                 salary_tax_bank['salary_records'],
                 payroll_summary['salary'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP),
+                embedded_bonus,
             )
             tax_match = _match_bank_record_combination(
                 salary_tax_bank['treasury_records'],

@@ -149,6 +149,23 @@ class BusinessRegressionTests(unittest.TestCase):
                 self.balanced(v._build_a6_rows(company,code,ws,2026,2,t),112)
             finally:wb.close()
 
+    def test_september_a3_posts_embedded_bonus_as_separate_rows(self):
+        wb,ws,total=payroll()
+        try:
+            records=bank('2050')[('2050',2026,3)]
+            records[0]['outgoing_amt']=Decimal('607920.20')
+            september_bank={('2050',2026,9):records}
+            rows=v._build_a3_rows('耐数电子','2050',ws,september_bank,2026,8,timesheet())
+            self.balanced(rows,Decimal('607930.20'))
+            bonus_rows=[r for r in rows if r['N']=='支付2025年9月部分年终奖']
+            self.assertEqual(
+                [(r['G'],r['I'],r['M']) for r in bonus_rows],
+                [(40,'2211010001','607833.20'),(50,'1002010001','607833.20')],
+            )
+            self.assertEqual(bonus_rows[1]['P'],'202')
+        finally:
+            wb.close()
+
     def test_bonus_months_ratio_and_wls_override(self):
         company='耐数信息'; bonus={'ratio_map':{m:Decimal('0.5') for m in range(1,13)},
             'rows_by_company':{company:[dict(dept='研发部',cost_center='20601001',

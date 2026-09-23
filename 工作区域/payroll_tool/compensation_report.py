@@ -9,11 +9,12 @@ from .workbook_io import load_workbook, workbook_scope
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from .bank_identity import TransactionIndex
+from .bank_identity import BankIdentityError, TransactionIndex
 from .rules import (
     BONUS_NET_BY_PAYMENT,
     BONUS_NOTES,
     BONUS_TAX_BY_PAYMENT,
+    EMBEDDED_BONUS_NET_BY_PAYMENT,
     FUND_BANK_OVERRIDE,
     MAX_BANK_MATCH_COMBO_SIZE,
     SOCIAL_COMPONENT_OVERRIDE_BY_PAYMENT,
@@ -196,7 +197,7 @@ def _collect_payroll_files(monthly_input_root):
     for batch in sorted(monthly_input_root.glob('2026-*处理批次*')):
         files.extend(sorted((batch / '01_工资单').glob('*.xlsx')))
 
-    seen = TransactionIndex()
+    seen = set()
     result = []
     for path in files:
         if not _looks_like_payroll_file(path):
@@ -269,6 +270,18 @@ def _load_payroll_summary(monthly_input_root):
             if not any(values.values()):
                 continue
             rounded = {key: _to_money(value) for key, value in values.items()}
+            embedded_bonus = EMBEDDED_BONUS_NET_BY_PAYMENT.get(
+                (code, payment_year, payment_month),
+                Decimal('0.00'),
+            )
+            if embedded_bonus:
+                if rounded['salary_net'] < embedded_bonus:
+                    raise ValueError(
+                        f'{code} {payment_year}-{payment_month:02d} 工资实发 '
+                        f'{rounded["salary_net"]} 小于应扣年终奖 {embedded_bonus}'
+                    )
+                rounded['salary_net'] -= embedded_bonus
+                rounded['net_salary'] -= embedded_bonus
             rounded.update(
                 {
                     'company_code': code,
@@ -305,13 +318,15 @@ def _normalize_bank_date(value):
 
 
 def _collect_bank_files(monthly_input_root):
-    candidates = []
+    candidates_by_name = {}
     for path in monthly_input_root.glob('**/*.xlsx'):
         if path.name.startswith('~$'):
             continue
         if '银行流水' in path.name or '对帐单' in path.name or any('银行流水' in part for part in path.parts):
-            candidates.append(path)
-    return sorted(set(candidates))
+            # Adjacent processing batches retain copies of the same monthly
+            # statement. Prefer the latest path for each statement filename.
+            candidates_by_name[path.name] = path
+    return sorted(candidates_by_name.values())
 
 
 def _contains_any(text, keywords):
@@ -350,9 +365,16 @@ def _load_standard_bank_records(path, ws, records, seen, stats):
         if code not in COMPANY_LABELS or year_month is None:
             continue
         payment_name = str(ws.cell(row_idx, 13).value or '').strip()
+        incoming_amt = _to_money(ws.cell(row_idx, 14).value)
         outgoing_amt = _to_money(ws.cell(row_idx, 15).value)
         usage = str(ws.cell(row_idx, 16).value or '').strip()
         bank_subject = str(ws.cell(row_idx, 34).value or '').strip()
+        raw_transaction_id = str(ws.cell(row_idx, id_col).value or '').strip() if id_col else ''
+        transaction_id = (
+            f'{raw_transaction_id}|{incoming_amt}|{outgoing_amt}'
+            if raw_transaction_id
+            else ''
+        )
         _append_bank_record(
             records,
             seen,
@@ -368,9 +390,9 @@ def _load_standard_bank_records(path, ws, records, seen, stats):
             bank_subject,
             bank_account=str(ws.cell(row_idx, 3).value or '').strip(),
             currency=str(ws.cell(row_idx, 5).value or '').strip(),
-            incoming_amt=_to_money(ws.cell(row_idx, 14).value),
+            incoming_amt=incoming_amt,
             counterparty_account=str(ws.cell(row_idx, 20).value or '').strip(),
-            transaction_id=str(ws.cell(row_idx, id_col).value or '').strip() if id_col else '',
+            transaction_id=transaction_id,
             sheet=ws.title,
         )
 
@@ -439,7 +461,15 @@ def _append_bank_record(
         'bank_subject': bank_subject,
     }
     record.update(metadata)
-    if not seen.add(record):
+    try:
+        added = seen.add(record)
+    except BankIdentityError as exc:
+        # The historical report scans retained copies across many batches.
+        # Keep the first copy and record the conservative identity warning.
+        seen.warnings.append(f'历史报表按首份流水保留：{exc}')
+        seen.deduped += 1
+        added = False
+    if not added:
         stats['deduped_row_count'] += 1
         return
     records.setdefault((code, year_month[0], year_month[1]), []).append(record)
@@ -449,7 +479,7 @@ def _append_bank_record(
 @workbook_scope
 def _load_bank_records(monthly_input_root):
     records = {}
-    seen = set()
+    seen = TransactionIndex()
     stats = {'source_file_count': 0, 'scanned_row_count': 0, 'kept_row_count': 0, 'deduped_row_count': 0}
 
     for path in _collect_bank_files(monthly_input_root):
@@ -579,7 +609,20 @@ def _build_output_rows(payroll_rows, bank_records):
             elif not fund_ok:
                 fund_note += f'；差额 {(fund_total - fund_bank_amount).quantize(CENT)}'
 
-        salary_match = _match_bank_record_combination(salary_records, ordinary_net, '普通工资')
+        embedded_bonus = EMBEDDED_BONUS_NET_BY_PAYMENT.get(
+            (code, payment_year, payment_month),
+            Decimal('0.00'),
+        )
+        salary_match = _match_bank_record_combination(
+            salary_records,
+            ordinary_net + embedded_bonus,
+            '代发工资',
+        )
+        if embedded_bonus and salary_match['matched']:
+            salary_match['amount'] = ordinary_net
+            salary_match['note'] += (
+                f'；银行代发扣除年终奖 {embedded_bonus} 后，普通工资为 {ordinary_net}'
+            )
         social_match = _match_bank_record_combination(treasuries, social_total, '社保国库')
         tax_match = _match_bank_record_combination(treasuries, tax_total, '个税国库')
         tax_hint_amount = TAX_BANK_AMOUNT_HINT.get((code, payment_year, payment_month))

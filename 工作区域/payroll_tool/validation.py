@@ -60,6 +60,7 @@ def _validate_voucher_groups(voucher_rows):
 def _validate_cross_group_accounts(voucher_rows):
     account_totals = {}
     other_project_credit = Decimal('0.00')
+    prior_bonus_payment_debit = Decimal('0.00')
 
     for row in voucher_rows:
         account = _format_code(row['I'])
@@ -72,6 +73,12 @@ def _validate_cross_group_accounts(voucher_rows):
 
         if account == '2211010001' and str(row['G']) == '50' and row['N'].endswith('其他项目'):
             other_project_credit += amount
+        if (
+            account == '2211010001'
+            and str(row['G']) == '40'
+            and row['N'] == '支付2025年9月部分年终奖'
+        ):
+            prior_bonus_payment_debit += amount
 
     issues = []
     for account in ACCOUNTS_TO_CROSS_CHECK:
@@ -80,10 +87,12 @@ def _validate_cross_group_accounts(voucher_rows):
         credit_total = totals['credit'].quantize(Decimal('0.01'))
 
         if account == '2211010001':
+            adjusted_debit = (debit_total - prior_bonus_payment_debit).quantize(Decimal('0.01'))
             adjusted_credit = (credit_total - other_project_credit).quantize(Decimal('0.01'))
-            if debit_total != adjusted_credit:
+            if adjusted_debit != adjusted_credit:
                 issues.append(
-                    f'{account} 跨凭证不平：借方 {debit_total}，贷方(扣除其他项目后) {adjusted_credit}'
+                    f'{account} 跨凭证不平：借方(扣除历史年终奖支付后) {adjusted_debit}，'
+                    f'贷方(扣除其他项目后) {adjusted_credit}'
                 )
         elif debit_total != credit_total:
             issues.append(f'{account} 跨凭证不平：借方 {debit_total}，贷方 {credit_total}')

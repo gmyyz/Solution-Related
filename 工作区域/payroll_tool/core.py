@@ -1,5 +1,5 @@
 from .payroll_input import _prepare_payroll_preview
-from .rules import DEPARTMENT_VOUCHER_SKIPS
+from .rules import DEPARTMENT_VOUCHER_SKIPS, EMBEDDED_BONUS_NET_BY_PAYMENT
 """core: extracted payroll responsibilities; business rules preserved."""
 import os
 from decimal import Decimal, ROUND_HALF_UP, ROUND_DOWN
@@ -10,7 +10,7 @@ from .banking import (
     _load_bank_records,
     _load_bank_records_with_stats,
     _match_bank_record_combination,
-    _match_salary_combination,
+    _match_salary_excluding_bonus,
     _match_treasury_combination,
     _normalize_bank_date_key,
     _summarize_bank_records,
@@ -236,7 +236,13 @@ def fill_first_sheet_ab(input_path, base_dir, mapping_path, bank_dir, log, run_o
     else:
         log('本次未选择 A1-A3，已跳过银行流水读取', 'warn')
 
-    preview = _prepare_payroll_preview(input_path, cost_center_map, timesheet_context, set(run_options.companies))
+    preview = _prepare_payroll_preview(
+        input_path,
+        cost_center_map,
+        timesheet_context,
+        set(run_options.companies),
+        payment_period=run_options.processing_period,
+    )
     wb, ws = preview['workbook'], preview['worksheet']
     header_ref = preview['header_ref']
     fill_a, fill_b = preview['fill_a'], preview['fill_b']
@@ -246,6 +252,12 @@ def fill_first_sheet_ab(input_path, base_dir, mapping_path, bank_dir, log, run_o
     cost_center_issue_count = sum(c['cost_center'] for c in counts)
     internal_order_issue_count = sum(c['order'] for c in counts)
     payroll_summary, rows_by_company = preview['payroll_summary'], preview['rows_by_company']
+    for company, bonus in preview['embedded_bonus_adjustments'].items():
+        log(
+            f'{company}实发已扣除银行代发中内含的年终奖 {bonus}；'
+            '工资分摊按不含年终奖口径生成，A3单列年终奖借方及银行贷方',
+            'warn',
+        )
     if internal_order_issue_count:
         raise ValueError(f'工资单有 {internal_order_issue_count} 行内部订单未匹配，已停止处理')
     log(f'A 列填充 {fill_a} 个空白单元格；B 列填充 {fill_b} 个空白单元格', 'ok')
@@ -276,9 +288,14 @@ def fill_first_sheet_ab(input_path, base_dir, mapping_path, bank_dir, log, run_o
 
             salary_tax_bank = _summarize_bank_records(bank_records, company_code, next_year, next_month)
             fund_bank = _summarize_bank_records(bank_records, company_code, payroll_year, payroll_month)
-            salary_match = _match_salary_combination(
+            embedded_bonus = EMBEDDED_BONUS_NET_BY_PAYMENT.get(
+                (company_code, next_year, next_month),
+                Decimal('0.00'),
+            )
+            salary_match = _match_salary_excluding_bonus(
                 salary_tax_bank['salary_records'],
                 summary['salary'].quantize(Decimal('0.01'), rounding=ROUND_HALF_UP),
+                embedded_bonus,
             )
             tax_match = _match_bank_record_combination(
                 salary_tax_bank['treasury_records'],

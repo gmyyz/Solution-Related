@@ -1,11 +1,10 @@
 from decimal import Decimal
-import io
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +13,7 @@ sys.path.insert(0, str(ROOT / '工作区域'))
 from payroll_tool.options import RunOptions, build_batch_layout_from_options  # noqa: E402
 from payroll_tool.pipeline import execute_payroll_run  # noqa: E402
 from payroll_tool.precheck import run_startup_precheck  # noqa: E402
+from payroll_tool.workbook_io import is_strict_xls, load_workbook  # noqa: E402
 
 
 class PayrollIntegrationTests(unittest.TestCase):
@@ -102,7 +102,8 @@ class PayrollIntegrationTests(unittest.TestCase):
             self.assertTrue(result['voucher_validation_summary']['耐数电子']['a5_balanced'])
             self.assertTrue(result['voucher_validation_summary']['耐数电子']['a6_balanced'])
 
-            wb = load_workbook(io.BytesIO(voucher_path.read_bytes()), data_only=True)
+            self.assertTrue(is_strict_xls(voucher_path))
+            wb = load_workbook(voucher_path, data_only=True)
             try:
                 totals = {}
                 for row in wb.active.iter_rows(min_row=2, max_col=13, values_only=True):

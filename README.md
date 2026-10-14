@@ -4,7 +4,7 @@
 
 ## 环境与启动
 
-已验证环境：Windows、CPython 3.13.3、openpyxl 3.1.5。安装 Python 时保留 Tcl/Tk 支持。
+已验证环境：Windows、CPython 3.13.3、Microsoft Excel、openpyxl 3.1.5。安装 Python 时保留 Tcl/Tk 支持。SAP 凭证发布时会调用本机 Excel，将工作簿转换为真正的 Excel 97–2003 XLS 格式；未安装 Excel 时会停止发布并明确报错。
 
 在仓库根目录执行：
 

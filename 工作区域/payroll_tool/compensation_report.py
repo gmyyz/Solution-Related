@@ -9,7 +9,7 @@ from .workbook_io import load_workbook, workbook_scope
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from .bank_identity import BankIdentityError, TransactionIndex
+from .bank_identity import TransactionIndex
 from .rules import (
     BONUS_NET_BY_PAYMENT,
     BONUS_NOTES,
@@ -369,12 +369,7 @@ def _load_standard_bank_records(path, ws, records, seen, stats):
         outgoing_amt = _to_money(ws.cell(row_idx, 15).value)
         usage = str(ws.cell(row_idx, 16).value or '').strip()
         bank_subject = str(ws.cell(row_idx, 34).value or '').strip()
-        raw_transaction_id = str(ws.cell(row_idx, id_col).value or '').strip() if id_col else ''
-        transaction_id = (
-            f'{raw_transaction_id}|{incoming_amt}|{outgoing_amt}'
-            if raw_transaction_id
-            else ''
-        )
+        transaction_id = str(ws.cell(row_idx, id_col).value or '').strip() if id_col else ''
         _append_bank_record(
             records,
             seen,
@@ -461,14 +456,9 @@ def _append_bank_record(
         'bank_subject': bank_subject,
     }
     record.update(metadata)
-    try:
-        added = seen.add(record)
-    except BankIdentityError as exc:
-        # The historical report scans retained copies across many batches.
-        # Keep the first copy and record the conservative identity warning.
-        seen.warnings.append(f'历史报表按首份流水保留：{exc}')
-        seen.deduped += 1
-        added = False
+    # Ambiguous cross-file duplicates and conflicting serials must stop the
+    # report: dropping either row would silently change the bank totals.
+    added = seen.add(record)
     if not added:
         stats['deduped_row_count'] += 1
         return

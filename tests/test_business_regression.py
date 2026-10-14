@@ -99,13 +99,40 @@ class BusinessRegressionTests(unittest.TestCase):
         rows=v._build_a10_rows('耐数信息','2060',2026,2,expense('耐数信息',cc='20602020'),timesheet('耐数信息','其他部门'))
         self.balanced(rows,10)
 
-    def test_wls_exceptions_expire(self):
+    def test_wls_exceptions_extend_through_september(self):
         for month in [6,7,8,9]:
             self.assertEqual(_should_skip_one_time_june_2026_accrual('耐数信息',2026,month,'WLS无线解决方案'),month in (6,7))
             rows=v._build_a10_rows('耐数信息','2060',2026,month-1,
                                   expense('耐数信息','WLS无线解决方案','20601001'),
                                   timesheet('耐数信息','WLS无线解决方案',month))
-            self.assertEqual(bool(rows),month==9)
+            self.assertEqual(rows,[])
+
+    def test_september_information_ats_accrual_is_skipped(self):
+        self.assertTrue(
+            _should_skip_one_time_june_2026_accrual(
+                '耐数信息', 2026, 9, 'ATS测试解决方案'
+            )
+        )
+        self.assertFalse(
+            _should_skip_one_time_june_2026_accrual(
+                '耐数信息', 2026, 10, 'ATS测试解决方案'
+            )
+        )
+        self.assertFalse(
+            _should_skip_one_time_june_2026_accrual(
+                '耐数电子', 2026, 9, 'ATS测试解决方案'
+            )
+        )
+
+        wb, ws, total = payroll('耐数信息', '2060', 'ATS测试解决方案')
+        try:
+            self.assertEqual(v._build_a5_rows('耐数信息', '2060', ws, total, 2026, 8), [])
+            self.assertEqual(
+                v._build_a6_rows('耐数信息', '2060', ws, 2026, 8, timesheet('耐数信息')),
+                [],
+            )
+        finally:
+            wb.close()
 
     def test_a9_loader_mapping_and_marker(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -118,6 +145,32 @@ class BusinessRegressionTests(unittest.TestCase):
             self.assertEqual({r['I'] for r in rows if r['G']==40},{'5001010011','5001010012'})
             self.assertTrue(all(r['O']=='x' and r['K']=='9201856' for r in rows if r['G']==50))
             path.unlink()
+
+    def test_a9_negative_expense_uses_absolute_amount_and_swaps_sides(self):
+        context = {
+            'allocation_rows': [
+                {'row_idx': 2, 'order': '9201001', 'ratio_base': Decimal('1'), 'total_actual': Decimal('1')}
+            ],
+            'total_ratio_base': Decimal('1'),
+            'summary_total': Decimal('1'),
+            'expense_rows': [
+                {
+                    'row_idx': 2,
+                    'source_account': '6601010003',
+                    'debit_gl': '5001010011',
+                    'amount': Decimal('-15.10'),
+                }
+            ],
+        }
+        rows = v._build_a9_rows('2050', 2026, 8, context)
+        self.balanced(rows, Decimal('15.10'))
+        self.assertEqual(
+            [(r['G'], r['I'], r['J'], r['K'], r['M'], r['O']) for r in rows],
+            [
+                (40, '6601010003', '20502020', '9201856', '15.10', ''),
+                (50, '5001010011', '', '9201001', '15.10', 'x'),
+            ],
+        )
 
     def test_small_allocation_and_negative_guard(self):
         self.assertEqual(_allocate_amount_by_weights('.01',[('a',1),('b',1),('c',1)]),{'c':Decimal('.01')})

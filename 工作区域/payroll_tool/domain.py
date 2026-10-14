@@ -392,5 +392,4 @@ def _should_skip_one_time_june_2026_accrual(company, posting_year, posting_month
 
 
 def _should_skip_one_time_august_2026_a10(company, posting_year, posting_month, dept):
-    return posting_year == 2026 and posting_month == 8 and skips_department(
-        company, posting_year, posting_month, dept, 'A10')
+    return skips_department(company, posting_year, posting_month, dept, 'A10')

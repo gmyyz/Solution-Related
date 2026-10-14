@@ -27,9 +27,10 @@ class UtilityTests(unittest.TestCase):
         self.assertEqual(sum(result.values()), Decimal('100.00'))
         self.assertEqual(sorted(result.values()), [Decimal('33.33'), Decimal('33.33'), Decimal('33.34')])
 
-    def test_wls_a10_skip_is_limited_to_august_2026(self):
+    def test_wls_a10_skip_is_limited_to_configured_2026_months(self):
         self.assertTrue(_should_skip_one_time_august_2026_a10('耐数信息', 2026, 8, 'WLS无线解决方案'))
-        self.assertFalse(_should_skip_one_time_august_2026_a10('耐数信息', 2026, 9, 'WLS无线解决方案'))
+        self.assertTrue(_should_skip_one_time_august_2026_a10('耐数信息', 2026, 9, 'WLS无线解决方案'))
+        self.assertFalse(_should_skip_one_time_august_2026_a10('耐数信息', 2026, 10, 'WLS无线解决方案'))
         self.assertFalse(_should_skip_one_time_august_2026_a10('耐数电子', 2026, 8, 'WLS无线解决方案'))
 
     def test_bank_combination_match(self):

@@ -10,6 +10,8 @@ DEPARTMENT_VOUCHER_SKIPS = {
     ('耐数信息', 2026, 6, 'WLS无线解决方案'): frozenset({'A5', 'A6', 'A10'}),
     ('耐数信息', 2026, 7, 'WLS无线解决方案'): frozenset({'A5', 'A6', 'A10'}),
     ('耐数信息', 2026, 8, 'WLS无线解决方案'): frozenset({'A10'}),
+    ('耐数信息', 2026, 9, 'WLS无线解决方案'): frozenset({'A10'}),
+    ('耐数信息', 2026, 9, 'ATS测试解决方案'): frozenset({'A5', 'A6'}),
 }
 
 

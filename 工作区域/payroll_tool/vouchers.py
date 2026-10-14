@@ -536,6 +536,7 @@ def _build_a4_rows(company, company_code, ws, total_row_idx, payroll_year, payro
 def _collect_a5_base_data(ws, company, posting_year, posting_month):
     grouped_amounts = {}
     debit_totals = {}
+    credit_totals = {}
     dept_by_cost_center = {}
     salary_total = Decimal('0')
     tax_total = Decimal('0')
@@ -565,6 +566,11 @@ def _collect_a5_base_data(ws, company, posting_year, posting_month):
             bucket[account] = bucket.get(account, Decimal('0')) + amount
             debit_totals[account] = debit_totals.get(account, Decimal('0')) + amount
 
+        for col_idx, account, _ in ACCRUAL_CREDIT_SPECS:
+            amount = _to_decimal(ws.cell(row_idx, col_idx).value)
+            if amount != Decimal('0'):
+                credit_totals[account] = credit_totals.get(account, Decimal('0')) + amount
+
         if item_type == '薪资':
             salary_total += _to_decimal(ws.cell(row_idx, 17).value)
             tax_total += _to_decimal(ws.cell(row_idx, 15).value)
@@ -573,6 +579,7 @@ def _collect_a5_base_data(ws, company, posting_year, posting_month):
     return {
         'grouped_amounts': grouped_amounts,
         'debit_totals': debit_totals,
+        'credit_totals': credit_totals,
         'dept_by_cost_center': dept_by_cost_center,
         'salary_total': salary_total.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP),
         'tax_total': tax_total.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP),
@@ -628,8 +635,8 @@ def _build_a5_rows(company, company_code, ws, total_row_idx, payroll_year, payro
                 )
             )
 
-    for col_idx, account, label in ACCRUAL_CREDIT_SPECS:
-        amount = _to_money(ws.cell(total_row_idx, col_idx).value)
+    for _, account, label in ACCRUAL_CREDIT_SPECS:
+        amount = _to_money(accrual_data['credit_totals'].get(account, Decimal('0')))
         if amount == Decimal('0.00'):
             continue
         rows.append(
@@ -898,60 +905,63 @@ def _build_a9_rows(company_code, payroll_year, payroll_month, co_context):
     text = f'CO工单分摊{posting_year}年{posting_month}月'
 
     rows = []
-    debit_allocations = {}
+    allocations = {}
     allocation_rows = co_context['allocation_rows']
     total_ratio_base = co_context['total_ratio_base']
 
     for item in co_context['expense_rows']:
-        credit_row = _make_voucher_row(
+        source_posting_key = 50 if item['amount'] > Decimal('0.00') else 40
+        allocation_posting_key = 40 if source_posting_key == 50 else 50
+        amount = abs(item['amount'])
+        source_row = _make_voucher_row(
             'A9',
             company_code,
             posting_date,
             item['source_account'],
-            item['amount'],
+            amount,
             text,
-            50,
+            source_posting_key,
             CO_CREDIT_COST_CENTER,
             CO_CREDIT_ORDER,
         )
-        credit_row['O'] = 'x'
-        rows.append(
-            credit_row
-        )
+        if source_posting_key == 50:
+            source_row['O'] = 'x'
+        rows.append(source_row)
 
         rounded_total = Decimal('0.00')
         last_key = None
         for alloc in allocation_rows:
-            alloc_amount = (item['amount'] * alloc['ratio_base'] / total_ratio_base).quantize(
+            alloc_amount = (amount * alloc['ratio_base'] / total_ratio_base).quantize(
                 Decimal('0.01'),
                 rounding=ROUND_HALF_UP,
             )
-            key = (item['debit_gl'], alloc['order'])
-            debit_allocations[key] = debit_allocations.get(key, Decimal('0.00')) + alloc_amount
+            key = (allocation_posting_key, item['debit_gl'], alloc['order'])
+            allocations[key] = allocations.get(key, Decimal('0.00')) + alloc_amount
             rounded_total += alloc_amount
             last_key = key
 
-        diff = (item['amount'] - rounded_total).quantize(Decimal('0.01'))
+        diff = (amount - rounded_total).quantize(Decimal('0.01'))
         if diff != Decimal('0.00') and last_key is not None:
-            debit_allocations[last_key] += diff
+            allocations[last_key] += diff
 
-    for (debit_gl, order), amount in sorted(debit_allocations.items()):
+    for (posting_key, debit_gl, order), amount in sorted(allocations.items()):
         amount = amount.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
         if amount == Decimal('0.00'):
             continue
-        rows.append(
-            _make_voucher_row(
-                'A9',
-                company_code,
-                posting_date,
-                debit_gl,
-                amount,
-                text,
-                40,
-                '',
-                order,
-            )
+        allocation_row = _make_voucher_row(
+            'A9',
+            company_code,
+            posting_date,
+            debit_gl,
+            amount,
+            text,
+            posting_key,
+            '',
+            order,
         )
+        if posting_key == 50:
+            allocation_row['O'] = 'x'
+        rows.append(allocation_row)
 
     return rows
 

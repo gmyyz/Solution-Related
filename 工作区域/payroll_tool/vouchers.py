@@ -52,8 +52,8 @@ from .domain import (
     _period_text,
     _rebalance_expense_debit_rows,
     _shift_month,
-    _should_skip_one_time_august_2026_a10,
-    _should_skip_one_time_june_2026_accrual,
+    _should_skip_a10_allocation,
+    _should_skip_a5_accrual,
 )
 from .contexts import (
     _build_bonus_department_amounts,
@@ -552,7 +552,7 @@ def _collect_a5_base_data(ws, company, posting_year, posting_month):
             continue
 
         dept = _normalize_department_for_order(ws.cell(row_idx, 2).value)
-        if _should_skip_one_time_june_2026_accrual(company, posting_year, posting_month, dept):
+        if _should_skip_a5_accrual(company, posting_year, posting_month, dept):
             continue
         cost_center = _format_code(ws.cell(row_idx, 19).value)
         if cost_center and dept and cost_center not in dept_by_cost_center:
@@ -907,9 +907,10 @@ def _build_a9_rows(company_code, payroll_year, payroll_month, co_context):
     rows = []
     allocations = {}
     allocation_rows = co_context['allocation_rows']
-    total_ratio_base = co_context['total_ratio_base']
 
     for item in co_context['expense_rows']:
+        if item['amount'] == Decimal('0.00'):
+            continue
         source_posting_key = 50 if item['amount'] > Decimal('0.00') else 40
         allocation_posting_key = 40 if source_posting_key == 50 else 50
         amount = abs(item['amount'])
@@ -928,21 +929,25 @@ def _build_a9_rows(company_code, payroll_year, payroll_month, co_context):
             source_row['O'] = 'x'
         rows.append(source_row)
 
-        rounded_total = Decimal('0.00')
-        last_key = None
+        weights = {}
+        rounded = {}
+        total_weight = sum((alloc['ratio_base'] for alloc in allocation_rows), Decimal('0'))
+        last_order = None
         for alloc in allocation_rows:
-            alloc_amount = (amount * alloc['ratio_base'] / total_ratio_base).quantize(
-                Decimal('0.01'),
-                rounding=ROUND_HALF_UP,
-            )
-            key = (allocation_posting_key, item['debit_gl'], alloc['order'])
+            weights[alloc['order']] = weights.get(alloc['order'], Decimal('0')) + alloc['ratio_base']
+            order = alloc['order']
+            part = (amount * alloc['ratio_base'] / total_weight).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+            rounded[order] = rounded.get(order, Decimal('0')) + part
+            last_order = order
+        if last_order is not None:
+            rounded[last_order] += amount - sum(rounded.values(), Decimal('0'))
+        # Preserve already-posted normal allocations. Only replace the old
+        # last-order remainder when it would create a negative amount.
+        if any(part < 0 for part in rounded.values()):
+            rounded = _allocate_amount_by_weights(amount, sorted(weights.items()))
+        for order, alloc_amount in rounded.items():
+            key = (allocation_posting_key, item['debit_gl'], order)
             allocations[key] = allocations.get(key, Decimal('0.00')) + alloc_amount
-            rounded_total += alloc_amount
-            last_key = key
-
-        diff = (amount - rounded_total).quantize(Decimal('0.01'))
-        if diff != Decimal('0.00') and last_key is not None:
-            allocations[last_key] += diff
 
     for (posting_key, debit_gl, order), amount in sorted(allocations.items()):
         amount = amount.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
@@ -979,9 +984,7 @@ def _build_a10_rows(company, company_code, payroll_year, payroll_month, expense_
         dept = item['dept']
         if dept == 'OSD运营支持部' or 'OSD' in dept:
             continue
-        if _should_skip_one_time_august_2026_a10(company, posting_year, posting_month, dept):
-            continue
-        if _should_skip_one_time_june_2026_accrual(company, posting_year, posting_month, dept):
+        if _should_skip_a10_allocation(company, posting_year, posting_month, dept):
             continue
 
         key = (

@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from itertools import combinations
+from collections import Counter
 from pathlib import Path
 import re
 
@@ -425,6 +426,8 @@ def _load_cmb_bank_records(path, ws, records, seen, stats):
             outgoing_amt,
             usage,
             counterparty_account,
+            bank_account=str(ws.cell(row_idx, 1).value or '').strip(),
+            currency='CNY' if str(ws.cell(7, 2).value or '') == '人民币' else '',
             counterparty_account=counterparty_account, sheet=ws.title,
         )
 
@@ -472,14 +475,51 @@ def _load_bank_records(monthly_input_root):
     seen = TransactionIndex()
     stats = {'source_file_count': 0, 'scanned_row_count': 0, 'kept_row_count': 0, 'deduped_row_count': 0}
 
+    statements = []
     for path in _collect_bank_files(monthly_input_root):
         stats['source_file_count'] += 1
         wb = load_workbook(path, data_only=True, read_only=False)
         ws = wb[wb.sheetnames[0]]
-        if _is_cmb_statement(ws):
-            _load_cmb_bank_records(path, ws, records, seen, stats)
+        legacy = _is_cmb_statement(ws)
+        local_records = {}
+        local_seen = TransactionIndex()
+        local_stats = {'scanned_row_count': 0, 'kept_row_count': 0, 'deduped_row_count': 0}
+        if legacy:
+            _load_cmb_bank_records(path, ws, local_records, local_seen, local_stats)
         else:
-            _load_standard_bank_records(path, ws, records, seen, stats)
+            _load_standard_bank_records(path, ws, local_records, local_seen, local_stats)
+        stats['scanned_row_count'] += local_stats['scanned_row_count']
+        stats['deduped_row_count'] += local_stats['deduped_row_count']
+        statements.append((path, legacy, local_records))
+
+    def payment_fingerprints(rows):
+        return Counter((r.get('bank_account', ''), r.get('currency', ''),
+                        _normalize_bank_date(r['trans_date']), r['outgoing_amt'],
+                        r.get('counterparty_account', ''))
+                       for r in rows if r['outgoing_amt'] > 0)
+
+    for path, legacy, buckets in statements:
+        for period, rows in buckets.items():
+            fingerprints = payment_fingerprints(rows)
+            # Suppress an alternate-format monthly export only when ALL its
+            # payments and occurrence counts match a standard export for the
+            # same company, source account, currency and month.
+            known_account = all(r.get('bank_account') and r.get('currency') for r in rows)
+            duplicate_export = legacy and known_account and fingerprints and any(
+                not other_legacy and period in other_buckets and
+                fingerprints == payment_fingerprints(other_buckets[period])
+                for _, other_legacy, other_buckets in statements
+            )
+            if duplicate_export:
+                stats['deduped_row_count'] += len(rows)
+                seen.warnings.append(f'历史对账单与标准流水全月付款及次数一致，采用标准流水：{path.name}')
+                continue
+            for record in rows:
+                if seen.add(record):
+                    records.setdefault(period, []).append(record)
+                    stats['kept_row_count'] += 1
+                else:
+                    stats['deduped_row_count'] += 1
     stats['warnings'] = seen.warnings
     return records, stats
 

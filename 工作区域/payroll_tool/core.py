@@ -80,8 +80,8 @@ from .domain import (
     _sap_date_value,
     _select_treasury_records,
     _shift_month,
-    _should_skip_one_time_august_2026_a10,
-    _should_skip_one_time_june_2026_accrual,
+    _should_skip_a10_allocation,
+    _should_skip_a5_accrual,
 )
 from .voucher_output import (
     _generate_voucher_files,

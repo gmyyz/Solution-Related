@@ -8,7 +8,7 @@ import unittest
 from openpyxl import Workbook
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / '工作区域'))
 from payroll_tool import vouchers as v
-from payroll_tool.domain import _allocate_amount_by_weights, _should_skip_one_time_june_2026_accrual
+from payroll_tool.domain import _allocate_amount_by_weights, _should_skip_a5_accrual
 from payroll_tool.contexts import _load_co_workorder_context, _load_shared_expense_context
 from payroll_tool.validation import _validate_voucher_groups, _validate_cross_group_accounts
 
@@ -101,7 +101,7 @@ class BusinessRegressionTests(unittest.TestCase):
 
     def test_wls_exceptions_extend_through_september(self):
         for month in [6,7,8,9]:
-            self.assertEqual(_should_skip_one_time_june_2026_accrual('耐数信息',2026,month,'WLS无线解决方案'),month in (6,7))
+            self.assertEqual(_should_skip_a5_accrual('耐数信息',2026,month,'WLS无线解决方案'),month in (6,7))
             rows=v._build_a10_rows('耐数信息','2060',2026,month-1,
                                   expense('耐数信息','WLS无线解决方案','20601001'),
                                   timesheet('耐数信息','WLS无线解决方案',month))
@@ -109,17 +109,17 @@ class BusinessRegressionTests(unittest.TestCase):
 
     def test_september_information_ats_accrual_is_skipped(self):
         self.assertTrue(
-            _should_skip_one_time_june_2026_accrual(
+            _should_skip_a5_accrual(
                 '耐数信息', 2026, 9, 'ATS测试解决方案'
             )
         )
         self.assertFalse(
-            _should_skip_one_time_june_2026_accrual(
+            _should_skip_a5_accrual(
                 '耐数信息', 2026, 10, 'ATS测试解决方案'
             )
         )
         self.assertFalse(
-            _should_skip_one_time_june_2026_accrual(
+            _should_skip_a5_accrual(
                 '耐数电子', 2026, 9, 'ATS测试解决方案'
             )
         )

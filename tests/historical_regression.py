@@ -28,19 +28,31 @@ month=int(sys.argv[1])
 options=RunOptions(('耐数电子','耐数信息'),tuple('A'+str(i) for i in range(1,11)),2026,month)
 base=str(Path('工作区域').resolve());layout=build_batch_layout_from_options(base,options)
 try:
-    paths=_find_raw_files(layout.raw_dir,2026,month-1)
-    result=execute_payroll_run(paths[0],base,layout.mapping_path,layout.bank_dir,lambda *args:None,run_options=options)
-    vouchers={}
-    for category,path in result['voucher_paths'].items():
-        with open(path,'rb') as f:data=f.read()
-        import io
-        wb=load_workbook(io.BytesIO(data),data_only=True)
-        try:
-            rows=list(wb.active.iter_rows(min_row=2,max_col=17,values_only=True))
-            rows=[r for r in rows if any(v is not None for v in r)]
+    from contextlib import nullcontext
+    try:
+        from payroll_tool.workbook_io import excel_scope
+    except ImportError:
+        excel_scope = nullcontext
+    with excel_scope():
+        paths=_find_raw_files(layout.raw_dir,2026,month-1)
+        result=execute_payroll_run(paths[0],base,layout.mapping_path,layout.bank_dir,lambda *args:None,run_options=options)
+        vouchers={}
+        for category,path in result['voucher_paths'].items():
+            try:
+                from payroll_tool.workbook_io import read_voucher_values
+            except ImportError:
+                # The historical baseline predates the strict XLS reader.
+                import io
+                with open(path,'rb') as f:data=f.read()
+                wb=load_workbook(io.BytesIO(data),data_only=True)
+                try:
+                    rows=list(wb.active.iter_rows(min_row=2,max_col=17,values_only=True))
+                    rows=[r for r in rows if any(v is not None and v != '' for v in r)]
+                finally:wb.close()
+            else:
+                rows=read_voucher_values(path)
             vouchers[category]={'rows':len(rows),'sha256':hashlib.sha256(json.dumps(rows,default=str,ensure_ascii=True).encode()).hexdigest()}
-        finally:wb.close()
-    print(json.dumps({'status':'generated','vouchers':vouchers},ensure_ascii=True))
+        print(json.dumps({'status':'generated','vouchers':vouchers},ensure_ascii=True))
 except Exception as e:
     print(json.dumps({'status':'blocked','error':type(e).__name__+': '+str(e)},ensure_ascii=True))
 '''
@@ -87,7 +99,11 @@ def main():
         with open(path,'rb') as stream:unchanged &= hashlib.file_digest(stream,'sha256').hexdigest()==expected
     print(json.dumps({'source_files_unchanged':unchanged,'results':[
         {'batch':r['batch'],'equal':r['equal'],'baseline':r['baseline']['status'],
-         'current':r['current']['status'],'voucher_files':len(r['current'].get('vouchers',{}))}
+         'current':r['current']['status'],'voucher_files':len(r['current'].get('vouchers',{})),
+         'changed_files':[key for key in sorted(set(r['baseline'].get('vouchers',{})) |
+                                               set(r['current'].get('vouchers',{})))
+                          if r['baseline'].get('vouchers',{}).get(key) !=
+                             r['current'].get('vouchers',{}).get(key)]}
         for r in results]},ensure_ascii=True),flush=True)
 
 

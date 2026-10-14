@@ -1,5 +1,6 @@
 """Conservative transaction identity shared by payroll and historical reports."""
 from pathlib import Path
+from decimal import Decimal
 
 
 class BankIdentityError(ValueError):
@@ -24,6 +25,23 @@ def _compatible(a, b, fields):
                _value(a.get(f)) == _value(b.get(f)) for f in fields)
 
 
+def _is_reversal_pair(a, b):
+    """Accept a documented equal-and-opposite return, never arbitrary conflicts."""
+    for credit, debit in ((a, b), (b, a)):
+        incoming = Decimal(str(credit.get('incoming_amt') or 0))
+        outgoing = Decimal(str(debit.get('outgoing_amt') or 0))
+        if incoming <= 0 or incoming != outgoing:
+            continue
+        if Decimal(str(credit.get('outgoing_amt') or 0)) != 0 or Decimal(str(debit.get('incoming_amt') or 0)) != 0:
+            continue
+        if not any(word in str(credit.get('usage') or '') for word in ('退票', '冲正', '退款', '撤销', '支付平台退回')):
+            continue
+        fields = ('trans_date', 'currency', 'counterparty_account', 'payment_name')
+        if all(_value(credit.get(f)) and _value(credit.get(f)) == _value(debit.get(f)) for f in fields):
+            return True
+    return False
+
+
 class TransactionIndex:
     def __init__(self):
         self.records = []
@@ -41,6 +59,10 @@ class TransactionIndex:
             if key and key == prior_key:
                 conflicts = [f for f in CORE_FIELDS if _value(prior.get(f)) != _value(record.get(f))]
                 if conflicts:
+                    if _is_reversal_pair(prior, record):
+                        # Keep both legs. Continue searching so a retained copy
+                        # of either leg still deduplicates against that leg.
+                        continue
                     raise BankIdentityError(f'相同交易流水号字段冲突 {conflicts}：{refs}')
                 prior['sources'].append(source)
                 self.deduped += 1

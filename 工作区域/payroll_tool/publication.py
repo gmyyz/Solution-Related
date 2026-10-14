@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from copy import copy
-from .workbook_io import convert_to_strict_xls, load_workbook
+from .workbook_io import convert_to_strict_xls, load_workbook, excel_scope
 
 _targets = ContextVar('payroll_output_targets', default=None)
 
@@ -242,19 +242,15 @@ def merge_voucher(source, target, options, run_id):
         for group in selected:
             origins[group] = {'run_id': run_id, 'status': 'passed' if any(r['A']==group for r in fresh) else 'no_data'}
         new.save(source)
-        convert_to_strict_xls(source)
-        converted = load_workbook(source, data_only=True)
-        try:
-            converted_rows = _voucher_rows(converted.worksheets[0])
-            check_voucher_rows(converted_rows, options, company, allowed)
-            canonical = lambda rows: [
-                tuple('' if row[chr(65+i)] is None else str(row[chr(65+i)]) for i in range(17))
-                for row in rows
-            ]
-            if canonical(converted_rows) != canonical(combined):
-                raise ValueError('严格 XLS 转换后凭证内容发生变化')
-        finally:
-            converted.close()
+        converted_values = convert_to_strict_xls(source, read_values=True)
+        converted_rows = [dict(zip('ABCDEFGHIJKLMNOPQ', row)) for row in converted_values]
+        check_voucher_rows(converted_rows, options, company, allowed)
+        canonical = lambda rows: [
+            tuple('' if row[chr(65+i)] is None else str(row[chr(65+i)]) for i in range(17))
+            for row in rows
+        ]
+        if canonical(converted_rows) != canonical(combined):
+            raise ValueError('严格 XLS 转换后凭证内容发生变化')
         write_json(source.with_suffix(source.suffix + '.groups.json'),
                    {'file_hash': digest(source), 'groups': origins})
     finally:
@@ -286,6 +282,7 @@ def _without_paths(value, failed):
     return value
 
 
+@excel_scope()
 def run_transaction(input_path, base_dir, mapping_path, bank_dir, log, options, runner):
     from .options import build_batch_layout_from_options, requires_bank_data, requires_bonus_data, requires_co_data, requires_shared_expense_data
     from .banking import _find_bank_files

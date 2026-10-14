@@ -177,12 +177,11 @@ def _load_timesheet_match_context(timesheet_path):
         company = _normalize_text(summary_ws.cell(row=row_idx, column=6).value)
         project = _normalize_text(summary_ws.cell(row=row_idx, column=7).value)
         hours = _to_decimal(summary_ws.cell(row=row_idx, column=11).value)
-        order = _format_code(summary_ws.cell(row=row_idx, column=13).value)
+        order = ''
         item_type = _normalize_text(summary_ws.cell(row=row_idx, column=10).value)
-        if not order:
-            company_code = company_code_by_name.get(company)
-            if company_code is not None:
-                order, _ = _match_order_from_kok3(kok3_index, company_code, project, extra_lookup)
+        company_code = company_code_by_name.get(company)
+        if company_code is not None:
+            order, _ = _match_order_from_kok3(kok3_index, company_code, project, extra_lookup)
         if not company or not project or not order:
             continue
         key = (company, project)

@@ -387,9 +387,9 @@ def _amount_to_ten_thousand_yuan(amount):
     return (amount / Decimal('10000')).quantize(Decimal('0.0001'), rounding=ROUND_HALF_UP)
 
 
-def _should_skip_one_time_june_2026_accrual(company, posting_year, posting_month, dept):
+def _should_skip_a5_accrual(company, posting_year, posting_month, dept):
     return skips_department(company, posting_year, posting_month, dept, 'A5')
 
 
-def _should_skip_one_time_august_2026_a10(company, posting_year, posting_month, dept):
+def _should_skip_a10_allocation(company, posting_year, posting_month, dept):
     return skips_department(company, posting_year, posting_month, dept, 'A10')

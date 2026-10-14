@@ -11,7 +11,7 @@ from payroll_tool.banking import (  # noqa: E402
     _match_bank_record_combination,
     _match_salary_excluding_bonus,
 )
-from payroll_tool.core import _allocate_amount_by_weights, _should_skip_one_time_august_2026_a10  # noqa: E402
+from payroll_tool.core import _allocate_amount_by_weights, _should_skip_a10_allocation  # noqa: E402
 from payroll_tool.rules import MAX_BANK_MATCH_COMBO_SIZE  # noqa: E402
 from payroll_tool.workbook_utils import _to_decimal, _to_money  # noqa: E402
 
@@ -28,10 +28,10 @@ class UtilityTests(unittest.TestCase):
         self.assertEqual(sorted(result.values()), [Decimal('33.33'), Decimal('33.33'), Decimal('33.34')])
 
     def test_wls_a10_skip_is_limited_to_configured_2026_months(self):
-        self.assertTrue(_should_skip_one_time_august_2026_a10('耐数信息', 2026, 8, 'WLS无线解决方案'))
-        self.assertTrue(_should_skip_one_time_august_2026_a10('耐数信息', 2026, 9, 'WLS无线解决方案'))
-        self.assertFalse(_should_skip_one_time_august_2026_a10('耐数信息', 2026, 10, 'WLS无线解决方案'))
-        self.assertFalse(_should_skip_one_time_august_2026_a10('耐数电子', 2026, 8, 'WLS无线解决方案'))
+        self.assertTrue(_should_skip_a10_allocation('耐数信息', 2026, 8, 'WLS无线解决方案'))
+        self.assertTrue(_should_skip_a10_allocation('耐数信息', 2026, 9, 'WLS无线解决方案'))
+        self.assertFalse(_should_skip_a10_allocation('耐数信息', 2026, 10, 'WLS无线解决方案'))
+        self.assertFalse(_should_skip_a10_allocation('耐数电子', 2026, 8, 'WLS无线解决方案'))
 
     def test_bank_combination_match(self):
         records = [
